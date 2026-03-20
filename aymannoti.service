@@ -1,0 +1,16 @@
+[Unit]
+Description=Aymannoti — TikTok Discord Notification Bot
+After=network.target docker.service
+
+[Service]
+Type=simple
+User=aimnh
+WorkingDirectory=/home/aimnh/Aymannoti
+ExecStart=/home/aimnh/Aymannoti/venv/bin/python main.py
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aymannoti Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+  <div class="topbar">
+    <div class="topbar-brand">
+      <button class="mobile-menu-btn" onclick="toggleMobileMenu()">☰</button>
+      <h1><span>Ayman</span>noti</h1>
+      <span class="version-badge">v{{ version }}</span>
+    </div>
+    <div class="status-bar">
+      <div class="stat"><span class="stat-value" id="stat-accounts">-</span><span class="stat-label">Accounts</span>
+      </div>
+      <div class="stat"><span class="stat-value" id="stat-groups">-</span><span class="stat-label">Groups</span></div>
+      <div class="stat"><span class="stat-value" id="stat-posts">-</span><span class="stat-label">Posts Seen</span>
+      </div>
+      <div class="bot-status offline" id="bot-status"><span class="dot"></span><span
+          id="bot-status-text">Checking...</span></div>
+    </div>
+  </div>
+  <div class="layout">
+    <div class="sidebar" id="sidebar">
+      <div class="sidebar-title">Groups</div>
+      <div id="group-list"></div>
+      <button class="btn btn-primary" onclick="showModal('add-group-modal')">+ New Group</button>
+      <div class="sidebar-tools">
+        <div class="sidebar-title">Tools</div>
+        <div class="sidebar-nav-item" id="nav-logs" onclick="showLogs()">📊 Bot Logs</div>
+        <button class="btn" onclick="showModal('check-user-modal')">🔍 Check User</button>
+        <button class="btn" onclick="showModal('test-webhook-modal')">🔔 Test Webhook</button>
+      </div>
+    </div>
+    <div class="content" id="content">
+      <div class="empty-state" id="empty-state">
+        <div class="icon">📡</div>
+        <p>Select a group to manage accounts, or create a new group to start tracking TikTok profiles.</p>
+      </div>
+      <div id="group-content" style="display:none">
+        <div class="content-header">
+          <h2 id="content-title">Accounts</h2>
+          <div class="content-actions">
+            <button class="btn" onclick="showModal('edit-group-modal')">✏️ Edit</button>
+            <button class="btn btn-primary" onclick="showModal('add-accounts-modal')">+ Add Accounts</button>
+          </div>
+        </div>
+        <div class="search-bar">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="account-search" placeholder="Search accounts..." oninput="filterAccounts()">
+        </div>
+        <table class="account-table">
+          <thead>
+            <tr>
+              <th>Username</th>
+              <th>Posts Seen</th>
+              <th>Last Activity</th>
+              <th style="text-align:right">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="account-list"></tbody>
+        </table>
+      </div>
+      <div id="logs-content" style="display:none">
+        <div class="content-header">
+          <h2>📊 Bot Activity Log</h2>
+          <div class="content-actions">
+            <button class="btn" onclick="loadLogs()">↻ Refresh</button>
+            <button class="btn btn-danger" onclick="clearLogs()">Clear</button>
+          </div>
+        </div>
+        <div class="log-summary-grid" id="log-summary">
+          <div class="log-stat-card">
+            <div class="value" id="log-cycles">-</div>
+            <div class="label">Total Cycles</div>
+          </div>
+          <div class="log-stat-card success">
+            <div class="value" id="log-notifs">-</div>
+            <div class="label">Notifications</div>
+          </div>
+          <div class="log-stat-card danger">
+            <div class="value" id="log-errors">-</div>
+            <div class="label">Errors</div>
+          </div>
+          <div class="log-stat-card warn">
+            <div class="value" id="log-last-checked">-</div>
+            <div class="label">Last Checked</div>
+          </div>
+          <div class="log-stat-card">
+            <div class="value" id="log-duration">-</div>
+            <div class="label">Avg Time</div>
+          </div>
+        </div>
+        <div class="log-scroll">
+          <table class="log-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Event</th>
+                <th>Accts</th>
+                <th>Sent</th>
+                <th>Errs</th>
+                <th>Time (s)</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+            <tbody id="log-list"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Group Modal -->
+  <div class="modal-overlay" id="add-group-modal">
+    <div class="modal">
+      <h3>Create New Group</h3>
+      <div class="form-group"><label>Icon</label>
+        <div class="emoji-grid" id="add-icon-grid"></div>
+      </div>
+      <div class="form-group"><label>Group Name</label>
+        <input id="group-name" type="text" placeholder="e.g. Comedy, Gaming, Music...">
+      </div>
+      <div class="form-group"><label>Discord Webhook URL</label>
+        <input id="group-webhook" type="text" placeholder="https://discord.com/api/webhooks/...">
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="hideModal('add-group-modal')">Cancel</button>
+        <button class="btn btn-primary" onclick="addGroup()">Create Group</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Group Modal -->
+  <div class="modal-overlay" id="edit-group-modal">
+    <div class="modal">
+      <h3>Edit Group</h3>
+      <div class="form-group"><label>Icon</label>
+        <div class="emoji-grid" id="edit-icon-grid"></div>
+      </div>
+      <div class="form-group"><label>Group Name</label>
+        <input id="edit-group-name" type="text">
+      </div>
+      <div class="form-group"><label>Discord Webhook URL</label>
+        <input id="edit-group-webhook" type="text">
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-danger" onclick="deleteGroupFromEdit()" style="margin-right:auto">Delete Group</button>
+        <button class="btn" onclick="hideModal('edit-group-modal')">Cancel</button>
+        <button class="btn btn-primary" onclick="saveGroupEdit()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Accounts Modal -->
+  <div class="modal-overlay" id="add-accounts-modal">
+    <div class="modal">
+      <h3>Add Accounts to <span id="add-accounts-group-name"></span></h3>
+      <div id="add-step-input">
+        <div class="form-group"><label>TikTok Usernames</label>
+          <textarea id="add-usernames"
+            placeholder="Enter usernames separated by commas, spaces, or new lines"></textarea>
+          <div class="hint">Paste one per line or separate with commas. The @ is optional.</div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn" onclick="hideModal('add-accounts-modal')">Cancel</button>
+          <button class="btn" onclick="addAccounts()">Add Without Checking</button>
+          <button class="btn btn-primary" onclick="verifyAndAdd()">Verify & Add</button>
+        </div>
+      </div>
+      <div id="add-step-verify" style="display:none">
+        <div class="verify-summary" id="verify-summary"></div>
+        <div class="verify-list" id="verify-results"></div>
+        <div class="modal-actions">
+          <button class="btn" onclick="backToInput()">Back</button>
+          <button class="btn btn-primary" id="add-verified-btn" onclick="addVerified()" disabled>Add Verified
+            (0)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Check User Modal -->
+  <div class="modal-overlay" id="check-user-modal">
+    <div class="modal">
+      <h3>🔍 Check TikTok User</h3>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">Verify a user exists by fetching their feed.
+      </p>
+      <div class="form-group"><label>Username</label>
+        <div style="display:flex;gap:8px">
+          <input id="check-username" type="text" placeholder="username" style="flex:1">
+          <button class="btn btn-primary" id="check-btn" onclick="checkUser()">Check</button>
+        </div>
+      </div>
+      <div id="check-result"></div>
+      <div class="modal-actions" style="margin-top:16px"><button class="btn"
+          onclick="hideModal('check-user-modal')">Close</button></div>
+    </div>
+  </div>
+
+  <!-- Test Webhook Modal -->
+  <div class="modal-overlay" id="test-webhook-modal">
+    <div class="modal">
+      <h3>🔔 Test Webhook</h3>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">Send a test notification to your Discord
+        channel.</p>
+      <div class="form-group"><label>Webhook URL</label>
+        <input id="test-webhook-url" type="text" placeholder="https://discord.com/api/webhooks/...">
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="hideModal('test-webhook-modal')">Cancel</button>
+        <button class="btn btn-primary" id="test-btn" onclick="testWebhook()">Send Test</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toasts"></div>
+
+  <script>
+    let selectedGroup = null;
+    let currentView = 'groups';
+    let currentGroupData = {};
+    let allAccountsCache = [];
+    const EMOJIS = ['📁', '🎮', '🎵', '😂', '💰', '⚽', '📱', '🎬', '🎨', '💡', '🔥', '💎', '👑', '🌟', '🎯', '❤️'];
+    let selectedAddIcon = '📁';
+    let selectedEditIcon = '📁';
+
+    function toast(msg, type = 'success') {
+      const c = document.getElementById('toasts'), el = document.createElement('div');
+      el.className = `toast toast-${type}`; el.textContent = msg;
+      c.appendChild(el); setTimeout(() => el.remove(), 4000);
+    }
+    function toggleMobileMenu() { document.getElementById('sidebar').classList.toggle('mobile-open'); }
+
+    // Emoji grids
+    function buildEmojiGrid(containerId, selected, onSelect) {
+      const c = document.getElementById(containerId); c.innerHTML = '';
+      EMOJIS.forEach(e => {
+        const btn = document.createElement('button'); btn.type = 'button';
+        btn.className = 'emoji-opt' + (e === selected ? ' active' : '');
+        btn.textContent = e;
+        btn.onclick = () => { c.querySelectorAll('.emoji-opt').forEach(b => b.classList.remove('active')); btn.classList.add('active'); onSelect(e); };
+        c.appendChild(btn);
+      });
+    }
+
+    // Modals
+    function showModal(id) {
+      document.getElementById(id).classList.add('show');
+      if (id === 'add-accounts-modal') document.getElementById('add-accounts-group-name').textContent = selectedGroup;
+      if (id === 'add-group-modal') { selectedAddIcon = '📁'; buildEmojiGrid('add-icon-grid', selectedAddIcon, e => selectedAddIcon = e); }
+      if (id === 'edit-group-modal' && currentGroupData) {
+        document.getElementById('edit-group-name').value = currentGroupData.name || '';
+        document.getElementById('edit-group-webhook').value = currentGroupData.webhook_url || '';
+        selectedEditIcon = currentGroupData.icon || '📁';
+        buildEmojiGrid('edit-icon-grid', selectedEditIcon, e => selectedEditIcon = e);
+      }
+    }
+    function hideModal(id) { document.getElementById(id).classList.remove('show'); if (id === 'add-accounts-modal') backToInput(); }
+    document.querySelectorAll('.modal-overlay').forEach(el => { el.addEventListener('click', e => { if (e.target === el) el.classList.remove('show'); }); });
+
+    async function api(url, opts = {}) {
+      const r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
+      return { ok: r.ok, status: r.status, data: await r.json() };
+    }
+
+    async function loadStats() {
+      const { data } = await api('/api/stats');
+      document.getElementById('stat-accounts').textContent = data.total_accounts ?? 0;
+      document.getElementById('stat-groups').textContent = data.total_groups ?? 0;
+      document.getElementById('stat-posts').textContent = data.total_posts ?? 0;
+    }
+
+    async function loadStatus() {
+      try {
+        const { data } = await api('/api/status');
+        const el = document.getElementById('bot-status'), t = document.getElementById('bot-status-text');
+        if (data.running && data.last_cycle) { el.className = 'bot-status online'; t.textContent = `Last: ${timeSince(new Date(data.last_cycle))}`; }
+        else { el.className = 'bot-status offline'; t.textContent = 'Offline'; }
+      } catch { document.getElementById('bot-status').className = 'bot-status offline'; document.getElementById('bot-status-text').textContent = 'Unknown'; }
+    }
+
+    function timeSince(d) { const s = Math.floor((new Date() - d) / 1000); if (s < 60) return 'just now'; const m = Math.floor(s / 60); if (m < 60) return `${m}m ago`; const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`; return `${Math.floor(h / 24)}d ago`; }
+    function formatTime(i) { if (!i) return '-'; const d = new Date(i), p = n => String(n).padStart(2, '0'); return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; }
+
+    // Groups
+    async function loadGroups() {
+      const { data } = await api('/api/groups');
+      const list = document.getElementById('group-list'); list.innerHTML = '';
+      data.forEach(g => {
+        const el = document.createElement('div');
+        el.className = 'group-item' + (selectedGroup === g.name ? ' active' : '');
+        el.innerHTML = `
+      <span class="group-icon">${g.icon || '📁'}</span>
+      <div class="group-info"><div class="name">${esc(g.name)}</div><div class="count">${g.account_count} accounts</div></div>
+      <div class="group-actions-wrap">
+        <button class="group-act-btn del" onclick="event.stopPropagation();deleteGroup('${esc(g.name)}')" title="Delete">✕</button>
+      </div>`;
+        el.addEventListener('click', () => { currentGroupData = g; selectGroup(g.name); });
+        list.appendChild(el);
+        if (selectedGroup === g.name) currentGroupData = g;
+      });
+    }
+
+    function selectGroup(name) {
+      selectedGroup = name; currentView = 'groups';
+      document.getElementById('nav-logs').classList.remove('active');
+      document.getElementById('logs-content').style.display = 'none';
+      document.getElementById('sidebar').classList.remove('mobile-open');
+      loadGroups(); loadAccounts(name);
+    }
+
+    function showLogs() {
+      currentView = 'logs'; selectedGroup = null;
+      document.getElementById('empty-state').style.display = 'none';
+      document.getElementById('group-content').style.display = 'none';
+      document.getElementById('logs-content').style.display = 'block';
+      document.getElementById('nav-logs').classList.add('active');
+      document.getElementById('sidebar').classList.remove('mobile-open');
+      document.querySelectorAll('.group-item').forEach(el => el.classList.remove('active'));
+      loadLogs();
+    }
+
+    // Accounts
+    async function loadAccounts(groupName) {
+      document.getElementById('empty-state').style.display = 'none';
+      document.getElementById('group-content').style.display = 'block';
+      document.getElementById('content-title').textContent = `${currentGroupData.icon || '📁'} ${groupName}`;
+      document.getElementById('account-search').value = '';
+
+      const { data } = await api(`/api/groups/${encodeURIComponent(groupName)}/accounts`);
+      allAccountsCache = data;
+      renderAccounts(data);
+    }
+
+    function renderAccounts(data) {
+      const list = document.getElementById('account-list'); list.innerHTML = '';
+      if (!data.length) { list.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:50px">No accounts yet. Click "+ Add Accounts" to start tracking.</td></tr>'; return; }
+      data.forEach(a => {
+        const tr = document.createElement('tr');
+        const ls = a.last_seen ? timeSince(new Date(a.last_seen)) : 'Never';
+        tr.innerHTML = `<td class="username-cell"><a href="https://tiktok.com/@${esc(a.username)}" target="_blank">@${esc(a.username)}</a></td>
+      <td>${a.posts_seen}</td><td style="color:var(--text-muted)">${ls}</td>
+      <td><div class="actions-cell">
+        <button class="btn btn-sm btn-test" onclick="testPost('${esc(a.username)}',this)" title="Send latest post to Discord">📤 Test</button>
+        <button class="btn btn-sm" onclick="checkUserInline('${esc(a.username)}',this)">🔍</button>
+        <button class="btn btn-sm btn-danger" onclick="removeAccount('${esc(a.username)}')">✕</button>
+      </div></td>`;
+        list.appendChild(tr);
+      });
+    }
+
+    function filterAccounts() {
+      const q = document.getElementById('account-search').value.toLowerCase().trim();
+      if (!q) { renderAccounts(allAccountsCache); return; }
+      renderAccounts(allAccountsCache.filter(a => a.username.toLowerCase().includes(q)));
+    }
+
+    // Test Post
+    async function testPost(username, btn) {
+      const o = btn.innerHTML; btn.innerHTML = '<span class="spinner"></span>'; btn.disabled = true;
+      try { const { ok, data } = await api(`/api/groups/${encodeURIComponent(selectedGroup)}/accounts/${encodeURIComponent(username)}/test`, { method: 'POST' }); toast(ok ? (data.message || 'Sent!') : (data.error || 'Failed'), 'error' !== undefined && ok ? 'success' : 'error'); }
+      catch { toast(`Failed to send test for @${username}`, 'error'); }
+      btn.innerHTML = o; btn.disabled = false;
+    }
+
+    // Add/Edit/Delete Group
+    async function addGroup() {
+      const name = document.getElementById('group-name').value.trim(), webhook = document.getElementById('group-webhook').value.trim();
+      if (!name || !webhook) { toast('Fill in both fields', 'error'); return; }
+      const { ok, data } = await api('/api/groups', { method: 'POST', body: { name, webhook_url: webhook, icon: selectedAddIcon } });
+      if (ok) { toast(`Group "${name}" created`); hideModal('add-group-modal'); document.getElementById('group-name').value = ''; document.getElementById('group-webhook').value = ''; currentGroupData = { name, webhook_url: webhook, icon: selectedAddIcon, account_count: 0 }; selectedGroup = name; loadGroups(); loadAccounts(name); loadStats(); }
+      else toast(data.error || 'Failed', 'error');
+    }
+
+    async function saveGroupEdit() {
+      const newName = document.getElementById('edit-group-name').value.trim();
+      const newWebhook = document.getElementById('edit-group-webhook').value.trim();
+      if (!newName) { toast('Name required', 'error'); return; }
+      const { ok, data } = await api(`/api/groups/${encodeURIComponent(selectedGroup)}`, { method: 'PUT', body: { new_name: newName, webhook_url: newWebhook, icon: selectedEditIcon } });
+      if (ok) { toast('Group updated'); hideModal('edit-group-modal'); selectedGroup = data.name; currentGroupData = { ...currentGroupData, name: data.name, webhook_url: newWebhook, icon: selectedEditIcon }; loadGroups(); loadAccounts(data.name); }
+      else toast(data.error || 'Failed', 'error');
+    }
+
+    async function deleteGroup(name) {
+      if (!confirm(`Delete "${name}"?`)) return;
+      const { ok } = await api(`/api/groups/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      if (ok) { toast(`Deleted "${name}"`); if (selectedGroup === name) { selectedGroup = null; document.getElementById('empty-state').style.display = 'flex'; document.getElementById('group-content').style.display = 'none'; } loadGroups(); loadStats(); }
+      else toast('Failed', 'error');
+    }
+
+    function deleteGroupFromEdit() { hideModal('edit-group-modal'); deleteGroup(selectedGroup); }
+
+    // Verify & Add
+    let verifiedUsers = [];
+    function backToInput() { document.getElementById('add-step-input').style.display = 'block'; document.getElementById('add-step-verify').style.display = 'none'; verifiedUsers = []; }
+
+    async function getAllExistingAccounts() {
+      const existing = new Set();
+      try { const { data: groups } = await api('/api/groups'); for (const g of groups) { const { data: accts } = await api(`/api/groups/${encodeURIComponent(g.name)}/accounts`); if (Array.isArray(accts)) accts.forEach(a => existing.add(a.username.toLowerCase())); } } catch { }
+      return existing;
+    }
+
+    async function verifyAndAdd() {
+      const raw = document.getElementById('add-usernames').value.trim();
+      if (!raw) { toast('Enter at least one username', 'error'); return; }
+      const usernames = [...new Set(raw.split(/[,\n\s]+/).map(u => u.trim().replace(/^@/, '')).filter(Boolean))];
+      if (usernames.length > 1000) { toast('Max 1000 at a time', 'error'); return; }
+
+      document.getElementById('add-step-input').style.display = 'none';
+      document.getElementById('add-step-verify').style.display = 'block';
+      const container = document.getElementById('verify-results');
+      container.innerHTML = '<div class="verify-row"><span class="spinner"></span> <span>Checking for duplicates…</span></div>';
+      document.getElementById('verify-summary').innerHTML = 'Checking…';
+      verifiedUsers = [];
+
+      const allExisting = await getAllExistingAccounts();
+      container.innerHTML = '';
+      const dupes = [], toCheck = [];
+      usernames.forEach(u => { if (allExisting.has(u.toLowerCase())) dupes.push(u); else toCheck.push(u); });
+      let skipped = dupes.length;
+
+      dupes.forEach(u => { const r = document.createElement('div'); r.className = 'verify-row'; r.innerHTML = `<span class="badge badge-pending">SKIP</span> <span>@${esc(u)}</span> <span style="color:var(--text-muted);margin-left:auto;font-size:12px">موجود مسبقاً في مجموعة أخرى</span>`; container.appendChild(r); });
+
+      if (!toCheck.length) { document.getElementById('verify-summary').innerHTML = `All <strong>${dupes.length}</strong> username(s) already exist.`; document.getElementById('add-verified-btn').textContent = 'Add (0)'; document.getElementById('add-verified-btn').disabled = true; return; }
+
+      document.getElementById('verify-summary').innerHTML = `Checking <strong>${toCheck.length}</strong>…` + (skipped ? ` (${skipped} duplicates skipped)` : '');
+
+      toCheck.forEach(u => { const r = document.createElement('div'); r.className = 'verify-row'; r.id = `vr-${CSS.escape(u)}`; r.innerHTML = `<span class="spinner"></span> <span>@${esc(u)}</span>`; container.appendChild(r); });
+
+      let found = 0, failed = 0;
+      for (const username of toCheck) {
+        const row = document.getElementById(`vr-${CSS.escape(username)}`);
+        try {
+          const { data } = await api(`/api/check/${encodeURIComponent(username)}`);
+          if (data.status === 'found') {
+            const label = data.post_count > 0 ? `✓ ${data.post_count} posts` : '✓ حساب موجود — يمكن إضافته';
+            const cls = data.post_count > 0 ? 'badge-ok' : 'badge-zero';
+            row.innerHTML = `<span class="badge ${cls}">OK</span> <span>@${esc(username)}</span> <span style="color:var(--text-muted);margin-left:auto;font-size:12px">${label}</span>`;
+            verifiedUsers.push(username); found++;
+          } else {
+            row.innerHTML = `<span class="badge badge-err">✕</span> <span>@${esc(username)}</span> <span style="color:var(--text-muted);margin-left:auto;font-size:12px">${esc(data.message || 'تعذر العثور على هذا الحساب')}</span>`;
+            failed++;
+          }
+        } catch {
+          row.innerHTML = `<span class="badge badge-err">✕</span> <span>@${esc(username)}</span> <span style="color:var(--text-muted);margin-left:auto;font-size:12px">تعذر العثور على هذا الحساب</span>`;
+          failed++;
+        }
+        const st = skipped ? `, <span style="color:var(--accent)">${skipped} skipped</span>` : '';
+        document.getElementById('verify-summary').innerHTML = `<strong>${found + failed}</strong>/${toCheck.length} — <span style="color:var(--success)">${found} ✓</span> <span style="color:var(--danger)">${failed} ✕</span>${st}`;
+        document.getElementById('add-verified-btn').textContent = `Add Verified (${found})`;
+        document.getElementById('add-verified-btn').disabled = found === 0;
+      }
+    }
+
+    async function addVerified() {
+      if (!verifiedUsers.length) return;
+      const { ok, data } = await api(`/api/groups/${encodeURIComponent(selectedGroup)}/accounts`, { method: 'POST', body: { usernames: verifiedUsers.join(',') } });
+      if (ok) { toast(`Added ${data.added.length} account(s)`); hideModal('add-accounts-modal'); document.getElementById('add-usernames').value = ''; loadAccounts(selectedGroup); loadGroups(); loadStats(); }
+      else toast(data.error || 'Failed', 'error');
+    }
+
+    async function addAccounts() {
+      const raw = document.getElementById('add-usernames').value.trim();
+      if (!raw) { toast('Enter at least one username', 'error'); return; }
+      const { ok, data } = await api(`/api/groups/${encodeURIComponent(selectedGroup)}/accounts`, { method: 'POST', body: { usernames: raw } });
+      if (ok) { const m = []; if (data.added.length) m.push(`Added ${data.added.length}`); if (data.skipped.length) m.push(`${data.skipped.length} existed`); toast(m.join(', ') || 'Done'); hideModal('add-accounts-modal'); document.getElementById('add-usernames').value = ''; loadAccounts(selectedGroup); loadGroups(); loadStats(); }
+      else toast(data.error || 'Failed', 'error');
+    }
+
+    async function removeAccount(username) {
+      if (!confirm(`Remove @${username}?`)) return;
+      const { ok } = await api(`/api/groups/${encodeURIComponent(selectedGroup)}/accounts/${encodeURIComponent(username)}`, { method: 'DELETE' });
+      if (ok) { toast(`Removed @${username}`); loadAccounts(selectedGroup); loadGroups(); loadStats(); } else toast('Failed', 'error');
+    }
+
+    async function checkUserInline(username, btn) {
+      const o = btn.innerHTML; btn.innerHTML = '<span class="spinner"></span>'; btn.disabled = true;
+      try { const { data } = await api(`/api/check/${encodeURIComponent(username)}`); toast(data.status === 'found' ? (data.post_count > 0 ? `@${username}: ${data.post_count} posts` : `@${username}: حساب موجود — 0 فيديو`) : `@${username}: ${data.message}`, data.status === 'found' ? 'success' : 'error'); }
+      catch { toast(`Failed @${username}`, 'error'); }
+      btn.innerHTML = o; btn.disabled = false;
+    }
+
+    async function checkUser() {
+      const username = document.getElementById('check-username').value.trim().replace(/^@/, '');
+      if (!username) { toast('Enter a username', 'error'); return; }
+      const btn = document.getElementById('check-btn'), res = document.getElementById('check-result');
+      btn.innerHTML = '<span class="spinner"></span>'; btn.disabled = true; res.innerHTML = '';
+      try {
+        const { data } = await api(`/api/check/${encodeURIComponent(username)}`);
+        if (data.status === 'found') {
+          const badge = data.post_count > 0 ? 'badge-ok' : 'badge-zero', msg = data.post_count > 0 ? `${data.post_count} posts` : (data.message || '0 فيديو');
+          let html = `<div class="check-result"><h4><span class="badge ${badge}">Found</span> @${esc(data.username)} — ${msg}</h4>`;
+          if (data.latest_posts?.length) { html += '<div style="margin-top:8px">'; data.latest_posts.forEach(p => { html += `<div class="post-item"><a href="${esc(p.url)}" target="_blank">${esc(p.title || p.url)}</a></div>`; }); html += '</div>'; }
+          res.innerHTML = html + '</div>';
+        } else res.innerHTML = `<div class="check-result"><h4><span class="badge badge-err">Error</span> @${esc(data.username)}</h4><p style="font-size:13px;color:var(--danger);margin-top:6px">${esc(data.message)}</p></div>`;
+      } catch { res.innerHTML = '<div class="check-result"><span class="badge badge-err">Error</span> Could not reach server.</div>'; }
+      btn.textContent = 'Check'; btn.disabled = false;
+    }
+
+    async function testWebhook() {
+      const url = document.getElementById('test-webhook-url').value.trim();
+      if (!url) { toast('Enter URL', 'error'); return; }
+      const btn = document.getElementById('test-btn'); btn.innerHTML = '<span class="spinner"></span>'; btn.disabled = true;
+      try { const { ok, data } = await api('/api/test-webhook', { method: 'POST', body: { webhook_url: url } }); toast(ok ? (data.message || 'Sent!') : (data.error || 'Failed'), ok ? 'success' : 'error'); } catch { toast('Failed', 'error'); }
+      btn.textContent = 'Send Test'; btn.disabled = false;
+    }
+
+    // Logs
+    async function loadLogs() {
+      try { const { data: s } = await api('/api/logs/summary'); document.getElementById('log-cycles').textContent = s.total_cycles ?? 0; document.getElementById('log-notifs').textContent = s.total_notifications ?? 0; document.getElementById('log-errors').textContent = s.total_errors ?? 0; document.getElementById('log-duration').textContent = s.avg_duration ? s.avg_duration + 's' : '-'; if (s.last_cycle) document.getElementById('log-last-checked').textContent = s.last_cycle.accounts_checked ?? 0; } catch { }
+      try {
+        const { data: logs } = await api('/api/logs?limit=200'); const tb = document.getElementById('log-list'); tb.innerHTML = '';
+        if (!logs.length) { tb.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:40px">No logs yet.</td></tr>'; return; }
+        logs.forEach(l => { const tr = document.createElement('tr'); tr.innerHTML = `<td style="white-space:nowrap;color:var(--text-muted)">${formatTime(l.timestamp)}</td><td>${eventBadge(l.event, l.level)}</td><td>${l.accounts_checked || '-'}</td><td>${l.notifications_sent ? `<span style="color:var(--success)">${l.notifications_sent}</span>` : '-'}</td><td>${l.errors ? `<span style="color:var(--danger)">${l.errors}</span>` : '-'}</td><td>${l.duration ? l.duration + 's' : '-'}</td><td class="log-details" title="${esc(l.details)}">${esc(l.details) || '-'}</td>`; tb.appendChild(tr); });
+      } catch { document.getElementById('log-list').innerHTML = '<tr><td colspan="7" style="color:var(--danger)">Failed to load</td></tr>'; }
+    }
+    function eventBadge(ev, lv) { const m = { 'cycle_complete': { l: 'Cycle', c: lv === 'warning' ? 'badge-warn' : 'badge-ok' }, 'notifications_sent': { l: 'Notif', c: 'badge-ok' }, 'errors_occurred': { l: 'Error', c: 'badge-err' }, 'bot_started': { l: 'Started', c: 'badge-info' }, 'bot_stopped': { l: 'Stopped', c: 'badge-pending' } }; const i = m[ev] || { l: ev, c: 'badge-info' }; return `<span class="badge ${i.c}">${i.l}</span>`; }
+    async function clearLogs() { if (!confirm('Clear all logs?')) return; const { ok } = await api('/api/logs', { method: 'DELETE' }); if (ok) { toast('Cleared'); loadLogs(); } else toast('Failed', 'error'); }
+
+    function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+    async function init() { await Promise.all([loadStats(), loadGroups(), loadStatus()]); setInterval(loadStatus, 30000); setInterval(loadStats, 60000); }
+    init();
+  </script>
+</body>
+
+</html>
