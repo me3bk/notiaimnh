@@ -39,8 +39,14 @@ class Poller:
                 # Account valid but 0 posts — not a real failure
                 if _ZERO_POSTS_HINT in msg:
                     return []
-                # Account deleted / not found — no point retrying
-                if "Unable to extract" in msg or "does not exist" in msg or "404" in msg:
+                # Permanent errors — no point retrying
+                if (
+                    "Unable to extract" in msg
+                    or "does not exist" in msg
+                    or "404" in msg
+                    or "account is private" in msg.lower()
+                    or "This account is private" in msg
+                ):
                     raise
                 # Transient error — retry with backoff
                 last_err = e

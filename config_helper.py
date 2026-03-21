@@ -11,7 +11,17 @@ VERSION = "1.3"
 
 DEFAULT_CONFIG = {
     "tiktok": {"cookies_file": ""},
-    "polling": {"interval_minutes": 3, "delay_between_requests": 1},
+    "instagram": {
+        "cookies_file": "",
+        "username": "",   # optional — used by setup-cookies credential login
+        "password": "",   # optional — use setup-cookies to generate a cookie file instead
+    },
+    "polling": {
+        "interval_minutes": 3,
+        "delay_between_requests": 1,
+        "concurrent_requests": 5,           # TikTok parallel workers
+        "instagram_concurrent_requests": 1,  # Instagram: sequential to avoid blocks
+    },
     "discord": {"bot_name": "Aymannoti"},
     "dashboard": {"host": "0.0.0.0", "port": 8080},
     "groups": [],
