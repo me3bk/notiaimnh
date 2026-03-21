@@ -150,6 +150,7 @@ async def run():
     interval = config["polling"]["interval_minutes"] * 60
     delay = config["polling"]["delay_between_requests"]
     concurrent = config["polling"].get("concurrent_requests", 5)
+    ig_concurrent = config["polling"].get("instagram_concurrent_requests", 1)
 
     groups = config.get("groups", [])
     total_tiktok = sum(len(g.get("accounts", [])) for g in groups)
@@ -158,7 +159,8 @@ async def run():
     logger.info(
         f"Aymannoti v{VERSION} started — "
         f"tracking {total_tiktok} TikTok + {total_ig} Instagram accounts "
-        f"across {len(groups)} groups  |  concurrency={concurrent}"
+        f"across {len(groups)} groups  |  "
+        f"concurrency: TikTok={concurrent}, Instagram={ig_concurrent}"
     )
 
     with Database(DB_PATH) as db:
@@ -175,6 +177,7 @@ async def run():
             interval = config["polling"]["interval_minutes"] * 60
             delay = config["polling"]["delay_between_requests"]
             concurrent = config["polling"].get("concurrent_requests", 5)
+            ig_concurrent = config["polling"].get("instagram_concurrent_requests", 1)
             groups = config.get("groups", [])
 
             total_tiktok = sum(len(g.get("accounts", [])) for g in groups)
@@ -191,12 +194,16 @@ async def run():
 
             logger.info(
                 f"── Cycle #{cycle_number} started — "
-                f"{total} accounts to check (concurrency={concurrent}) ──"
+                f"{total} accounts to check "
+                f"(TikTok concurrency={concurrent}, Instagram concurrency={ig_concurrent}) ──"
             )
             cycle_start = time.monotonic()
 
-            # Build task list for all accounts across all groups
+            # Separate semaphores: TikTok can run many in parallel,
+            # Instagram must be sequential (or near-sequential) to avoid
+            # session-based checkpoint/block from its anti-bot detection.
             semaphore = asyncio.Semaphore(concurrent)
+            ig_semaphore = asyncio.Semaphore(ig_concurrent)
             tasks = []
 
             for group in groups:
@@ -230,7 +237,7 @@ async def run():
                     tasks.append(_poll_account(
                         ig_user, f"ig:{ig_user}", "instagram",
                         webhook_url, group_name,
-                        ig_poller, notifier, delay, semaphore,
+                        ig_poller, notifier, delay, ig_semaphore,
                     ))
 
             # Run all polls concurrently (bounded by semaphore)
