@@ -11,6 +11,7 @@ VERSION = "1.3"
 
 DEFAULT_CONFIG = {
     "tiktok": {"cookies_file": ""},
+    "instagram": {"cookies_file": ""},
     "polling": {"interval_minutes": 3, "delay_between_requests": 1},
     "discord": {"bot_name": "Aymannoti"},
     "dashboard": {"host": "0.0.0.0", "port": 8080},

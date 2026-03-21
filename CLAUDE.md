@@ -6,7 +6,7 @@ This file provides context for AI assistants (Claude, etc.) working on this code
 
 ## Project Overview
 
-**Aymannoti** is a TikTok-to-Discord notification bot. It polls TikTok accounts using `yt-dlp`, deduplicates posts via SQLite, and dispatches rich notifications to Discord webhooks. A Flask-based web dashboard provides account/group management and monitoring.
+**Aymannoti** is a TikTok and Instagram-to-Discord notification bot. It polls TikTok and Instagram accounts using `yt-dlp`, deduplicates posts via SQLite, and dispatches notifications to Discord webhooks. A Flask-based web dashboard provides account/group management and monitoring.
 
 - **Version**: 1.3
 - **Language**: Python 3.x
@@ -18,14 +18,15 @@ This file provides context for AI assistants (Claude, etc.) working on this code
 
 ```
 notiaimnh/
-├── main.py            # Entry point — async polling loop
-├── dashboard.py       # Flask web API and dashboard server
-├── poller.py          # TikTok feed fetcher (via yt-dlp)
-├── notifier.py        # Discord webhook dispatcher
-├── database.py        # SQLite data layer
-├── config_helper.py   # Config loading/saving + constants
-├── manage.py          # CLI for managing groups and accounts
-├── config.yaml        # Runtime config (webhooks, accounts, settings)
+├── main.py                # Entry point — async polling loop (TikTok + Instagram)
+├── dashboard.py           # Flask web API and dashboard server
+├── poller.py              # TikTok feed fetcher (via yt-dlp)
+├── instagram_poller.py    # Instagram feed fetcher (via yt-dlp)
+├── notifier.py            # Discord webhook dispatcher (TikTok + Instagram)
+├── database.py            # SQLite data layer
+├── config_helper.py       # Config loading/saving + constants
+├── manage.py              # CLI for managing groups and accounts (TikTok + Instagram)
+├── config.yaml            # Runtime config (webhooks, accounts, settings)
 ├── aymannoti.service  # systemd unit file
 ├── requirements.txt   # Python dependencies
 ├── setup_rsshub.sh    # Optional RSSHub Docker setup
@@ -115,6 +116,14 @@ notiaimnh/
 - `save_config(config)` — writes back to `config.yaml`
 - `VERSION = "1.3"`, `BASE_DIR`, `CONFIG_PATH` constants
 
+### `instagram_poller.py` — Instagram Feed Fetcher
+- Class `InstagramPoller`, mirrors `Poller` but targets Instagram
+- URL pattern: `https://www.instagram.com/<username>/`
+- Post URLs come from `entry["webpage_url"]` (can be `/p/<id>/` or `/reel/<id>/`)
+- Logs a warning if no `cookies_file` is set — Instagram aggressively rate-limits unauthenticated requests
+- Same retry/backoff logic as `Poller` (3 attempts, 2^n seconds)
+- Permanent error strings: `"does not exist"`, `"404"`, `"This account is private"`, `"Sorry, this page"`, `"not available"`
+
 ### `manage.py` — CLI Tool
 - Usage: `python manage.py <subcommand>`
 - Subcommands:
@@ -125,6 +134,10 @@ notiaimnh/
   - `account remove <group> <username>`
   - `account list`
   - `account import <group> <file>` — bulk import (lines starting with `#` are comments; `@` prefix stripped)
+  - `instagram add <group> <username> [username ...]`
+  - `instagram remove <group> <username>`
+  - `instagram list`
+  - `instagram import <group> <file>`
 
 ---
 
@@ -133,19 +146,28 @@ notiaimnh/
 Key config fields:
 
 ```yaml
-polling_interval: 180        # Seconds between full cycles
-request_delay: 1             # Seconds between per-account requests
-bot_name: "Aymannoti"        # Discord bot display name
+tiktok:
+  cookies_file: ''            # Path to Netscape cookies file for TikTok (optional)
+instagram:
+  cookies_file: ''            # Path to Netscape cookies file for Instagram (STRONGLY recommended)
+polling:
+  interval_minutes: 3         # Minutes between full cycles
+  delay_between_requests: 1   # Seconds between per-account requests
+discord:
+  bot_name: "Aymannoti"       # Discord bot display name
 dashboard:
   host: "0.0.0.0"
   port: 8080
 groups:
   - name: "GroupName"
-    webhook: "https://discord.com/api/webhooks/..."
-    accounts:
-      - username1
-      - username2
+    webhook_url: "https://discord.com/api/webhooks/..."
+    accounts:                 # TikTok usernames
+      - tiktok_user1
+    instagram_accounts:       # Instagram usernames
+      - insta_user1
 ```
+
+**Instagram cookies**: Instagram heavily rate-limits unauthenticated yt-dlp requests. Export cookies from a logged-in browser session (e.g. using the "Get cookies.txt LOCALLY" extension) and set `instagram.cookies_file` to the file path.
 
 Config is **hot-reloaded** each polling cycle — add/remove accounts without restarting the service.
 
@@ -174,7 +196,8 @@ Config is **hot-reloaded** each polling cycle — add/remove accounts without re
 - Cycle summaries include: accounts checked, notifications sent, errors
 
 ### Deduplication
-- Posts identified by `(username, post_id)` pair
+- TikTok posts: identified by `(username, post_id)` in the DB
+- Instagram posts: identified by `("ig:<username>", post_id)` — the `ig:` prefix prevents collision with TikTok keys of the same username
 - Each post ID is marked seen exactly once
 - On first check of an account, all current posts are marked seen (prevents notification flood on startup)
 

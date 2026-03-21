@@ -122,6 +122,78 @@ def account_import(args):
     account_add(args)
 
 
+# ── Instagram account commands ──────────────────────────────────
+
+
+def instagram_add(args):
+    config = load_config()
+    for g in config.get("groups", []):
+        if g["name"] == args.group:
+            existing = set(g.get("instagram_accounts", []))
+            added = []
+            for u in args.usernames:
+                clean = u.lstrip("@")
+                if clean in existing:
+                    print(f"  @{clean} already in '{args.group}' (Instagram)")
+                else:
+                    g.setdefault("instagram_accounts", []).append(clean)
+                    existing.add(clean)
+                    added.append(clean)
+            save_config(config)
+            if added:
+                print(f"Added {len(added)} Instagram account(s) to '{args.group}': {', '.join('@' + u for u in added)}")
+            return
+    print(f"Group '{args.group}' not found. Create it first:")
+    print(f'  python manage.py group add "{args.group}" <webhook_url>')
+
+
+def instagram_remove(args):
+    config = load_config()
+    for g in config.get("groups", []):
+        if g["name"] == args.group:
+            clean = args.username.lstrip("@")
+            before = len(g.get("instagram_accounts", []))
+            g["instagram_accounts"] = [a for a in g.get("instagram_accounts", []) if a != clean]
+            if len(g.get("instagram_accounts", [])) == before:
+                print(f"@{clean} not found in '{args.group}' (Instagram)")
+                return
+            save_config(config)
+            print(f"Removed Instagram @{clean} from '{args.group}'")
+            return
+    print(f"Group '{args.group}' not found.")
+
+
+def instagram_list(_args):
+    config = load_config()
+    total = 0
+    for g in config.get("groups", []):
+        accounts = g.get("instagram_accounts", [])
+        total += len(accounts)
+        if accounts:
+            print(f"\n[{g['name']}] ({len(accounts)} Instagram accounts)")
+            for a in accounts:
+                print(f"  @{a}")
+    print(f"\nTotal Instagram accounts: {total}")
+
+
+def instagram_import(args):
+    """Bulk-import Instagram usernames from a text file (one per line)."""
+    path = Path(args.file)
+    if not path.exists():
+        print(f"File not found: {path}")
+        return
+    usernames = [
+        line.strip().lstrip("@")
+        for line in path.read_text().splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    if not usernames:
+        print("No usernames found in file.")
+        return
+    args.usernames = usernames
+    instagram_add(args)
+
+
 # ── CLI setup ───────────────────────────────────────────────────
 
 
@@ -168,6 +240,28 @@ def main():
     a_imp.add_argument("group", help="Group name")
     a_imp.add_argument("file", help="Path to text file with usernames")
     a_imp.set_defaults(func=account_import)
+
+    # instagram
+    ip = sub.add_parser("instagram", help="Manage Instagram accounts")
+    isub = ip.add_subparsers(dest="action")
+
+    i_add = isub.add_parser("add", help="Add Instagram accounts to a group")
+    i_add.add_argument("group", help="Group name")
+    i_add.add_argument("usernames", nargs="+", help="Instagram username(s)")
+    i_add.set_defaults(func=instagram_add)
+
+    i_rm = isub.add_parser("remove", help="Remove an Instagram account")
+    i_rm.add_argument("group", help="Group name")
+    i_rm.add_argument("username", help="Instagram username")
+    i_rm.set_defaults(func=instagram_remove)
+
+    i_list = isub.add_parser("list", help="List all Instagram accounts")
+    i_list.set_defaults(func=instagram_list)
+
+    i_imp = isub.add_parser("import", help="Bulk-import Instagram usernames from a text file")
+    i_imp.add_argument("group", help="Group name")
+    i_imp.add_argument("file", help="Path to text file with usernames")
+    i_imp.set_defaults(func=instagram_import)
 
     args = parser.parse_args()
     if hasattr(args, "func"):

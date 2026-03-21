@@ -12,6 +12,7 @@ from pathlib import Path
 from config_helper import load_config, BASE_DIR, VERSION
 from database import Database
 from poller import Poller
+from instagram_poller import InstagramPoller
 from notifier import Notifier
 
 logging.basicConfig(
@@ -57,15 +58,22 @@ def _is_recent_post(post: dict, max_age_hours: int = MAX_POST_AGE_HOURS) -> bool
 async def run():
     config = load_config()
     cookies = config.get("tiktok", {}).get("cookies_file", "")
+    ig_cookies = config.get("instagram", {}).get("cookies_file", "")
     poller = Poller(cookies_file=cookies)
+    ig_poller = InstagramPoller(cookies_file=ig_cookies)
     bot_name = config.get("discord", {}).get("bot_name", "Aymannoti")
     notifier = Notifier(bot_name)
 
     interval = config["polling"]["interval_minutes"] * 60
     delay = config["polling"]["delay_between_requests"]
 
-    total = sum(len(g.get("accounts", [])) for g in config.get("groups", []))
-    logger.info(f"Aymannoti v{VERSION} started — tracking {total} accounts across {len(config.get('groups', []))} groups")
+    total_tiktok = sum(len(g.get("accounts", [])) for g in config.get("groups", []))
+    total_ig = sum(len(g.get("instagram_accounts", [])) for g in config.get("groups", []))
+    total = total_tiktok + total_ig
+    logger.info(
+        f"Aymannoti v{VERSION} started — tracking {total_tiktok} TikTok + {total_ig} Instagram "
+        f"accounts across {len(config.get('groups', []))} groups"
+    )
 
     # Log startup
     with Database(DB_PATH) as db:
@@ -81,7 +89,9 @@ async def run():
             config = load_config()
             interval = config["polling"]["interval_minutes"] * 60
             delay = config["polling"]["delay_between_requests"]
-            total = sum(len(g.get("accounts", [])) for g in config.get("groups", []))
+            total_tiktok = sum(len(g.get("accounts", [])) for g in config.get("groups", []))
+            total_ig = sum(len(g.get("instagram_accounts", [])) for g in config.get("groups", []))
+            total = total_tiktok + total_ig
 
             logger.info(f"── Cycle #{cycle_number} started — {total} accounts to check ──")
             cycle_start = time.monotonic()
@@ -148,6 +158,56 @@ async def run():
                             error_count += 1
                             error_details.append(f"@{username}: {str(e)[:80]}")
                             logger.error(f"  @{username} — ERROR: {e} ({account_duration}s)")
+
+                        await asyncio.sleep(delay)
+
+                    # ── Instagram accounts ────────────────────────────────────
+                    for ig_username in group.get("instagram_accounts", []):
+                        ig_username = ig_username.lstrip("@") if isinstance(ig_username, str) else ig_username.get("username", "")
+                        if not ig_username:
+                            continue
+
+                        checked_count += 1
+                        account_start = time.monotonic()
+                        # Prefix DB key to avoid collision with TikTok usernames
+                        db_key = f"ig:{ig_username}"
+                        try:
+                            posts = await ig_poller.fetch_feed(ig_username)
+                            first_check = not db.has_been_checked(db_key)
+                            account_duration = round(time.monotonic() - account_start, 1)
+
+                            if not posts:
+                                logger.info(f"  [IG] @{ig_username} — no posts found ({account_duration}s)")
+                            else:
+                                unseen = [(i, p) for i, p in enumerate(posts) if not db.is_seen(db_key, p["id"])]
+
+                                if first_check:
+                                    for _, post in unseen:
+                                        db.mark_seen(db_key, post["id"], post["url"])
+                                    logger.info(f"  [IG] @{ig_username} — initial sync, marked {len(unseen)} posts as seen ({account_duration}s)")
+                                elif unseen:
+                                    first_idx, first_post = unseen[0]
+                                    if first_idx == 0 and _is_recent_post(first_post):
+                                        await notifier.send(webhook_url, ig_username, first_post, group_name, platform="instagram")
+                                        new_count += 1
+                                        logger.info(f"  [IG] @{ig_username} — NEW POST sent! {first_post['url']} ({account_duration}s)")
+                                    elif first_idx == 0:
+                                        skipped_old += 1
+                                        logger.info(f"  [IG] @{ig_username} — latest post is too old, skipped ({account_duration}s)")
+                                    else:
+                                        skipped_old += len(unseen)
+                                        logger.info(f"  [IG] @{ig_username} — {len(unseen)} old unseen posts, skipped ({account_duration}s)")
+
+                                    for _, post in unseen:
+                                        db.mark_seen(db_key, post["id"], post["url"])
+                                else:
+                                    logger.info(f"  [IG] @{ig_username} — no new posts ({account_duration}s)")
+
+                        except Exception as e:
+                            account_duration = round(time.monotonic() - account_start, 1)
+                            error_count += 1
+                            error_details.append(f"[IG] @{ig_username}: {str(e)[:80]}")
+                            logger.error(f"  [IG] @{ig_username} — ERROR: {e} ({account_duration}s)")
 
                         await asyncio.sleep(delay)
 

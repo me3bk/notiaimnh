@@ -6,7 +6,8 @@ import asyncio
 
 logger = logging.getLogger("aymannoti")
 
-TIKTOK_COLOR = 0x69C9D0  # TikTok brand teal
+TIKTOK_COLOR = 0x69C9D0    # TikTok brand teal
+INSTAGRAM_COLOR = 0xE1306C  # Instagram brand pink
 
 
 class Notifier:
@@ -25,15 +26,25 @@ class Notifier:
         username: str,
         post: dict,
         group_name: str,
+        platform: str = "tiktok",
     ):
-        """Send a Discord webhook notification for a new TikTok post."""
-        msg_parts = [
-            "@everyone",
-            f"New TikTok from @{username}",
-            f"@{username} just posted a new video!",
-            "",
-            post["url"]
-        ]
+        """Send a Discord webhook notification for a new post."""
+        if platform == "instagram":
+            msg_parts = [
+                "@everyone",
+                f"New Instagram post from @{username}",
+                f"@{username} just posted on Instagram!",
+                "",
+                post["url"],
+            ]
+        else:
+            msg_parts = [
+                "@everyone",
+                f"New TikTok from @{username}",
+                f"@{username} just posted a new video!",
+                "",
+                post["url"],
+            ]
 
         payload = {
             "username": self.bot_name,
