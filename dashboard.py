@@ -48,8 +48,10 @@ def api_stats():
     with Database(str(DB_PATH)) as db:
         stats = db.get_stats()
     config = load_config()
-    stats["total_accounts"] = sum(len(g.get("accounts", [])) for g in config.get("groups", []))
-    stats["total_groups"] = len(config.get("groups", []))
+    groups = config.get("groups", [])
+    stats["total_accounts"] = sum(len(g.get("accounts", [])) for g in groups)
+    stats["total_instagram_accounts"] = sum(len(g.get("instagram_accounts", [])) for g in groups)
+    stats["total_groups"] = len(groups)
     return jsonify(stats)
 
 
@@ -74,12 +76,12 @@ def api_list_groups():
     config = load_config()
     groups = []
     for g in config.get("groups", []):
-        accounts = g.get("accounts", [])
         groups.append({
             "name": g["name"],
             "webhook_url": g.get("webhook_url", ""),
             "icon": g.get("icon", "📁"),
-            "account_count": len(accounts),
+            "account_count": len(g.get("accounts", [])),
+            "instagram_account_count": len(g.get("instagram_accounts", [])),
         })
     return jsonify(groups)
 
@@ -158,6 +160,15 @@ def api_list_accounts(name):
                     stats = db.get_user_stats(username)
                     accounts.append({
                         "username": username,
+                        "platform": "tiktok",
+                        "posts_seen": stats["posts_seen"],
+                        "last_seen": stats["last_seen"],
+                    })
+                for username in g.get("instagram_accounts", []):
+                    stats = db.get_user_stats(f"ig:{username}")
+                    accounts.append({
+                        "username": username,
+                        "platform": "instagram",
                         "posts_seen": stats["posts_seen"],
                         "last_seen": stats["last_seen"],
                     })
@@ -169,38 +180,44 @@ def api_list_accounts(name):
 def api_add_accounts(name):
     data = request.get_json()
     raw = data.get("usernames", "")
+    platform = data.get("platform", "tiktok").lower()
     # Accept comma, newline, or space separated usernames
     usernames = [u.strip().lstrip("@") for u in re.split(r"[,\n\s]+", raw) if u.strip()]
     if not usernames:
         return jsonify({"error": "No usernames provided"}), 400
+    if platform not in ("tiktok", "instagram"):
+        return jsonify({"error": "platform must be 'tiktok' or 'instagram'"}), 400
 
+    field = "accounts" if platform == "tiktok" else "instagram_accounts"
     config = load_config()
     for g in config.get("groups", []):
         if g["name"] == name:
-            existing = set(g.get("accounts", []))
+            existing = set(g.get(field, []))
             added = []
             skipped = []
             for u in usernames:
                 if u in existing:
                     skipped.append(u)
                 else:
-                    g.setdefault("accounts", []).append(u)
+                    g.setdefault(field, []).append(u)
                     existing.add(u)
                     added.append(u)
             save_config(config)
-            return jsonify({"added": added, "skipped": skipped})
+            return jsonify({"added": added, "skipped": skipped, "platform": platform})
     return jsonify({"error": "Group not found"}), 404
 
 
 @app.route("/api/groups/<name>/accounts/<username>", methods=["DELETE"])
 def api_remove_account(name, username):
+    platform = request.args.get("platform", "tiktok").lower()
+    field = "accounts" if platform == "tiktok" else "instagram_accounts"
     config = load_config()
     for g in config.get("groups", []):
         if g["name"] == name:
             clean = username.lstrip("@")
-            before = len(g.get("accounts", []))
-            g["accounts"] = [a for a in g.get("accounts", []) if a != clean]
-            if len(g["accounts"]) == before:
+            before = len(g.get(field, []))
+            g[field] = [a for a in g.get(field, []) if a != clean]
+            if len(g.get(field, [])) == before:
                 return jsonify({"error": "Account not found in group"}), 404
             save_config(config)
             return jsonify({"ok": True})
@@ -212,10 +229,12 @@ def api_remove_account(name, username):
 
 @app.route("/api/groups/<name>/accounts/<username>/test", methods=["POST"])
 def api_test_post(name, username):
-    """Fetch the latest post from a user and send it to the group's webhook."""
+    """Fetch the latest post from a user and send it to the group's webhook.
+    Query param: ?platform=tiktok (default) or ?platform=instagram
+    """
+    platform = request.args.get("platform", "tiktok").lower()
     clean = username.lstrip("@")
 
-    # Find the group and its webhook
     config = load_config()
     webhook_url = None
     for g in config.get("groups", []):
@@ -225,62 +244,109 @@ def api_test_post(name, username):
     if not webhook_url:
         return jsonify({"error": "Group not found or no webhook configured"}), 404
 
-    # Fetch the latest post
+    bot_name = config.get("discord", {}).get("bot_name", "Aymannoti")
+
+    if platform == "instagram":
+        return _test_instagram_post(clean, name, webhook_url, bot_name, config)
+    return _test_tiktok_post(clean, name, webhook_url, bot_name)
+
+
+def _test_tiktok_post(clean, group_name, webhook_url, bot_name):
     url = f"https://www.tiktok.com/@{clean}"
     try:
         with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
             result = ydl.extract_info(url, download=False)
-
         if not result or not result.get("entries"):
             return jsonify({"error": f"@{clean} has no posts to send"}), 404
-
         entries = [e for e in result.get("entries", []) if e]
         if not entries:
             return jsonify({"error": f"@{clean} has no posts to send"}), 404
-
-        # Use the first (latest) entry
         entry = entries[0]
         vid = str(entry.get("id", ""))
         post_url = f"https://www.tiktok.com/@{clean}/video/{vid}" if vid else entry.get("url", "")
-        bot_name = config.get("discord", {}).get("bot_name", "Aymannoti")
-        msg_parts = [
-            "@everyone",
-            f"🧪 Test — New TikTok from @{clean}",
-            f"@{clean} just posted a new video!",
-            "",
-            post_url
-        ]
-
         payload = {
             "username": bot_name,
-            "content": "\n".join(msg_parts),
+            "content": "\n".join([
+                "@everyone",
+                f"Test — New TikTok from @{clean}",
+                f"@{clean} just posted a new video!",
+                "",
+                post_url,
+            ]),
         }
-
-        resp = httpx.post(webhook_url, json=payload, timeout=15)
-        if resp.status_code == 429:
-            retry_after = resp.json().get("retry_after", 5)
-            return jsonify({"error": f"Rate limited, try again in {retry_after}s"}), 429
-
-        if resp.status_code in (200, 204):
-            return jsonify({
-                "ok": True,
-                "message": f"Sent latest post from @{clean} to #{name}",
-                "post_url": post_url,
-            })
-        resp.raise_for_status()
-        return jsonify({"ok": True, "message": "Test post sent!"})
-
+        return _send_test_webhook(webhook_url, payload, clean, group_name, post_url)
     except yt_dlp.utils.DownloadError as e:
         msg = str(e)
         if _ZERO_POSTS_HINT in msg:
             return jsonify({"error": f"@{clean} has no posts to send"}), 404
         if any(hint in msg for hint in _DELETED_HINTS):
-            return jsonify({"error": "تعذر العثور على هذا الحساب"}), 404
+            return jsonify({"error": "Account not found"}), 404
         return jsonify({"error": msg[:200]}), 502
-    except httpx.HTTPStatusError as e:
-        return jsonify({"error": f"Discord returned {e.response.status_code}"}), 502
     except Exception as e:
         return jsonify({"error": str(e)[:200]}), 500
+
+
+def _test_instagram_post(clean, group_name, webhook_url, bot_name, config):
+    ig_cfg = config.get("instagram", {})
+    opts = {**YDL_OPTS}
+    if ig_cfg.get("cookies_file"):
+        opts["cookiefile"] = ig_cfg["cookies_file"]
+    if ig_cfg.get("username"):
+        opts["username"] = ig_cfg["username"]
+    if ig_cfg.get("password"):
+        opts["password"] = ig_cfg["password"]
+
+    url = f"https://www.instagram.com/{clean}/"
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            result = ydl.extract_info(url, download=False)
+        if not result or not result.get("entries"):
+            return jsonify({"error": f"@{clean} has no Instagram posts to send"}), 404
+        entries = [e for e in result.get("entries", []) if e]
+        if not entries:
+            return jsonify({"error": f"@{clean} has no Instagram posts to send"}), 404
+        entry = entries[0]
+        vid = str(entry.get("id", ""))
+        post_url = (
+            entry.get("webpage_url")
+            or entry.get("url")
+            or f"https://www.instagram.com/p/{vid}/"
+        )
+        post_type = "Reel" if "/reel/" in post_url else "Post"
+        payload = {
+            "username": bot_name,
+            "content": "\n".join([
+                "@everyone",
+                f"Test — New Instagram {post_type} from @{clean}",
+                f"@{clean} just posted a new {post_type.lower()} on Instagram!",
+                "",
+                post_url,
+            ]),
+        }
+        return _send_test_webhook(webhook_url, payload, clean, group_name, post_url)
+    except yt_dlp.utils.DownloadError as e:
+        msg = str(e).lower()
+        if "private" in msg or "login" in msg or "checkpoint" in msg:
+            return jsonify({"error": "Account is private or cookies are required"}), 404
+        if "does not exist" in msg or "404" in msg or "sorry" in msg:
+            return jsonify({"error": "Instagram account not found"}), 404
+        return jsonify({"error": str(e)[:200]}), 502
+    except Exception as e:
+        return jsonify({"error": str(e)[:200]}), 500
+
+
+def _send_test_webhook(webhook_url, payload, clean, group_name, post_url):
+    try:
+        resp = httpx.post(webhook_url, json=payload, timeout=15)
+        if resp.status_code == 429:
+            retry_after = resp.json().get("retry_after", 5)
+            return jsonify({"error": f"Rate limited, try again in {retry_after}s"}), 429
+        if resp.status_code in (200, 204):
+            return jsonify({"ok": True, "message": f"Sent latest post from @{clean} to #{group_name}", "post_url": post_url})
+        resp.raise_for_status()
+        return jsonify({"ok": True, "message": "Test post sent!"})
+    except httpx.HTTPStatusError as e:
+        return jsonify({"error": f"Discord returned {e.response.status_code}"}), 502
 
 
 # ── API: Check User ─────────────────────────────────────────────
@@ -288,8 +354,18 @@ def api_test_post(name, username):
 
 @app.route("/api/check/<username>")
 def api_check_user(username):
-    """Check if a TikTok user exists and optionally has posts."""
+    """Check if a TikTok or Instagram user exists and optionally has posts.
+    Query param: ?platform=tiktok (default) or ?platform=instagram
+    """
+    platform = request.args.get("platform", "tiktok").lower()
     clean = username.lstrip("@")
+
+    if platform == "instagram":
+        return _check_instagram_user(clean)
+    return _check_tiktok_user(clean)
+
+
+def _check_tiktok_user(clean: str):
     url = f"https://www.tiktok.com/@{clean}"
     try:
         with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
@@ -299,10 +375,11 @@ def api_check_user(username):
             return jsonify({
                 "status": "found",
                 "username": clean,
+                "platform": "tiktok",
                 "post_count": 0,
                 "latest_posts": [],
                 "feed_title": f"@{clean}",
-                "message": "حساب موجود — لا يوجد فيديوهات حالياً",
+                "message": "Account found — no videos yet",
             })
 
         entries = [e for e in result.get("entries", []) if e]
@@ -314,10 +391,10 @@ def api_check_user(username):
                 "url": f"https://www.tiktok.com/@{clean}/video/{vid}" if vid else entry.get("url", ""),
                 "published": "",
             })
-
         return jsonify({
             "status": "found",
             "username": clean,
+            "platform": "tiktok",
             "feed_title": result.get("title", f"@{clean}"),
             "post_count": len(entries),
             "latest_posts": posts,
@@ -329,29 +406,79 @@ def api_check_user(username):
             return jsonify({
                 "status": "found",
                 "username": clean,
+                "platform": "tiktok",
                 "post_count": 0,
                 "latest_posts": [],
                 "feed_title": f"@{clean}",
-                "message": "حساب موجود — لا يوجد فيديوهات حالياً",
+                "message": "Account found — no videos yet",
             })
         if any(hint in msg for hint in _DELETED_HINTS):
-            return jsonify({
-                "status": "error",
-                "username": clean,
-                "message": "تعذر العثور على هذا الحساب",
-            }), 404
-        return jsonify({
-            "status": "error",
-            "username": clean,
-            "message": msg[:200],
-        }), 502
-
+            return jsonify({"status": "error", "username": clean, "message": "Account not found"}), 404
+        return jsonify({"status": "error", "username": clean, "message": msg[:200]}), 502
     except Exception as e:
+        return jsonify({"status": "error", "username": clean, "message": str(e)[:200]}), 500
+
+
+def _check_instagram_user(clean: str):
+    config = load_config()
+    ig_cfg = config.get("instagram", {})
+    opts = {**YDL_OPTS}
+    if ig_cfg.get("cookies_file"):
+        opts["cookiefile"] = ig_cfg["cookies_file"]
+    if ig_cfg.get("username"):
+        opts["username"] = ig_cfg["username"]
+    if ig_cfg.get("password"):
+        opts["password"] = ig_cfg["password"]
+
+    url = f"https://www.instagram.com/{clean}/"
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            result = ydl.extract_info(url, download=False)
+
+        if not result or not result.get("entries"):
+            return jsonify({
+                "status": "found",
+                "username": clean,
+                "platform": "instagram",
+                "post_count": 0,
+                "latest_posts": [],
+                "feed_title": f"@{clean}",
+                "message": "Account found — no posts yet",
+            })
+
+        entries = [e for e in result.get("entries", []) if e]
+        posts = []
+        for entry in entries[:5]:
+            vid = str(entry.get("id", ""))
+            post_url = (
+                entry.get("webpage_url")
+                or entry.get("url")
+                or f"https://www.instagram.com/p/{vid}/"
+            )
+            post_type = "reel" if "/reel/" in post_url else "post"
+            posts.append({
+                "title": (entry.get("title") or "")[:100],
+                "url": post_url,
+                "post_type": post_type,
+                "published": "",
+            })
         return jsonify({
-            "status": "error",
+            "status": "found",
             "username": clean,
-            "message": str(e)[:200],
-        }), 500
+            "platform": "instagram",
+            "feed_title": result.get("title", f"@{clean}"),
+            "post_count": len(entries),
+            "latest_posts": posts,
+        })
+
+    except yt_dlp.utils.DownloadError as e:
+        msg = str(e).lower()
+        if any(k in msg for k in ("private", "login", "checkpoint", "does not exist", "404", "sorry")):
+            status_msg = "Account is private or requires login" if "private" in msg or "login" in msg else "Account not found"
+            return jsonify({"status": "error", "username": clean, "platform": "instagram", "message": status_msg}), 404
+        return jsonify({"status": "error", "username": clean, "platform": "instagram", "message": str(e)[:200]}), 502
+    except Exception as e:
+        return jsonify({"status": "error", "username": clean, "platform": "instagram", "message": str(e)[:200]}), 500
 
 
 # ── API: Test Webhook ───────────────────────────────────────────
