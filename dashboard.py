@@ -271,7 +271,7 @@ def _test_tiktok_post(clean, group_name, webhook_url, bot_name):
                 f"Test — New TikTok from @{clean}",
                 f"@{clean} just posted a new video!",
                 "",
-                post_url,
+                f"<{post_url}>",
             ]),
         }
         return _send_test_webhook(webhook_url, payload, clean, group_name, post_url)
@@ -320,7 +320,7 @@ def _test_instagram_post(clean, group_name, webhook_url, bot_name, config):
                 f"Test — New Instagram {post_type} from @{clean}",
                 f"@{clean} just posted a new {post_type.lower()} on Instagram!",
                 "",
-                post_url,
+                f"<{post_url}>",
             ]),
         }
         return _send_test_webhook(webhook_url, payload, clean, group_name, post_url)

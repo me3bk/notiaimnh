@@ -42,7 +42,7 @@ class Notifier:
                 f"New Instagram {type_label} from @{username}",
                 f"@{username} just posted a new {type_label.lower()} on Instagram!",
                 "",
-                post["url"],
+                f"<{post['url']}>",
             ]
         else:
             msg_parts = [
@@ -50,7 +50,7 @@ class Notifier:
                 f"New TikTok from @{username}",
                 f"@{username} just posted a new video!",
                 "",
-                post["url"],
+                f"<{post['url']}>",
             ]
 
         payload = {
