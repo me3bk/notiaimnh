@@ -34,18 +34,26 @@ def _detect_post_type(url: str) -> str:
 
 
 class InstagramPoller:
-    def __init__(self, cookies_file: str = "", max_retries: int = 3):
+    def __init__(
+        self,
+        cookies_file: str = "",
+        username: str = "",
+        password: str = "",
+        max_retries: int = 3,
+    ):
         self._cookies_file = cookies_file
+        self._username = username
+        self._password = password
         self._max_retries = max_retries
-        self._base_opts = self._build_opts(cookies_file)
-        if not cookies_file:
+        self._base_opts = self._build_opts(cookies_file, username, password)
+        if not cookies_file and not username:
             logger.warning(
-                "InstagramPoller: no cookies_file set. "
+                "InstagramPoller: no cookies_file or username set. "
                 "Instagram heavily rate-limits unauthenticated requests — "
-                "set instagram.cookies_file in config.yaml for reliable results."
+                "run: python manage.py instagram setup-cookies --browser chrome"
             )
 
-    def _build_opts(self, cookies_file: str) -> dict:
+    def _build_opts(self, cookies_file: str, username: str = "", password: str = "") -> dict:
         opts = {
             "quiet": True,
             "no_warnings": True,
@@ -55,14 +63,29 @@ class InstagramPoller:
         }
         if cookies_file:
             opts["cookiefile"] = cookies_file
+        if username:
+            opts["username"] = username
+        if password:
+            opts["password"] = password
         return opts
 
-    def update_cookies(self, cookies_file: str) -> None:
-        """Hot-reload cookies path when config changes between cycles."""
-        if cookies_file != self._cookies_file:
+    def update_cookies(self, cookies_file: str, username: str = "", password: str = "") -> None:
+        """Hot-reload auth config when values change between cycles."""
+        changed = (
+            cookies_file != self._cookies_file
+            or username != self._username
+            or password != self._password
+        )
+        if changed:
             self._cookies_file = cookies_file
-            self._base_opts = self._build_opts(cookies_file)
-            logger.info(f"[Instagram] Cookies file updated: {cookies_file or '(none)'}")
+            self._username = username
+            self._password = password
+            self._base_opts = self._build_opts(cookies_file, username, password)
+            logger.info(
+                f"[Instagram] Auth config updated: "
+                f"cookies={'set' if cookies_file else 'none'}, "
+                f"username={'set' if username else 'none'}"
+            )
 
     async def fetch_feed(self, username: str) -> list[dict]:
         """Fetch recent posts/reels for an Instagram user via yt-dlp with retry."""

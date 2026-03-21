@@ -2,10 +2,11 @@
 """CLI tool for managing Aymannoti groups and accounts."""
 
 import argparse
+import getpass
 import sys
 from pathlib import Path
 
-from config_helper import load_config, save_config, VERSION
+from config_helper import load_config, save_config, BASE_DIR, VERSION
 
 
 # ── Group commands ──────────────────────────────────────────────
@@ -194,6 +195,144 @@ def instagram_import(args):
     instagram_add(args)
 
 
+# ── Instagram cookie setup ──────────────────────────────────────
+
+_SUPPORTED_BROWSERS = ("chrome", "firefox", "edge", "safari", "chromium", "brave", "opera")
+
+_COOKIE_FILE_DEFAULT = str(BASE_DIR / "instagram_cookies.txt")
+
+
+def instagram_setup_cookies(args):
+    """
+    Obtain Instagram cookies via one of two methods and save them to a file.
+
+    Method A (--browser):  read cookies from a locally installed browser that
+                           is already logged into Instagram (most reliable).
+    Method B (--username): attempt a credential login through yt-dlp and save
+                           the resulting session cookies to a file.
+                           NOTE: Instagram heavily restricts programmatic login
+                           since 2023 — this may fail or trigger 2FA/checkpoint.
+    """
+    try:
+        import yt_dlp
+    except ImportError:
+        print("ERROR: yt-dlp is not installed. Run:  pip install yt-dlp")
+        return
+
+    output_file = args.output or _COOKIE_FILE_DEFAULT
+
+    if args.browser:
+        _setup_via_browser(yt_dlp, args.browser.lower(), output_file)
+    elif args.username:
+        password = args.password or getpass.getpass(f"Instagram password for @{args.username}: ")
+        _setup_via_credentials(yt_dlp, args.username, password, output_file)
+    else:
+        print("Specify either --browser or --username.  Examples:")
+        print("  python manage.py instagram setup-cookies --browser chrome")
+        print("  python manage.py instagram setup-cookies --username myaccount")
+        print(f"  Supported browsers: {', '.join(_SUPPORTED_BROWSERS)}")
+        return
+
+
+def _setup_via_browser(yt_dlp, browser: str, output_file: str):
+    """Extract Instagram cookies from a locally installed browser."""
+    if browser not in _SUPPORTED_BROWSERS:
+        print(f"Unknown browser '{browser}'. Supported: {', '.join(_SUPPORTED_BROWSERS)}")
+        return
+
+    print(f"Extracting Instagram cookies from {browser} ...")
+    print("Make sure you are logged into Instagram in that browser.")
+
+    opts = {
+        "cookiesfrombrowser": (browser,),
+        "cookiefile": output_file,
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "extract_flat": True,
+        "socket_timeout": 20,
+    }
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            # Use Instagram's own verified account as a lightweight test URL
+            ydl.extract_info("https://www.instagram.com/instagram/", download=False)
+        _save_and_update_config(output_file)
+    except yt_dlp.utils.DownloadError as e:
+        msg = str(e)
+        if "login" in msg.lower() or "checkpoint" in msg.lower():
+            # Cookies were exported even if the page failed — check if file exists
+            if Path(output_file).exists() and Path(output_file).stat().st_size > 100:
+                print("WARNING: Instagram page returned a login challenge, but cookies were saved.")
+                print("The cookies may still work — try running the bot.")
+                _save_and_update_config(output_file)
+            else:
+                print(f"Failed — cookies not saved. Make sure you are logged into Instagram in {browser}.")
+                print(f"Detail: {msg[:200]}")
+        else:
+            print(f"Failed to extract cookies: {msg[:200]}")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+
+
+def _setup_via_credentials(yt_dlp, username: str, password: str, output_file: str):
+    """
+    Attempt a credential-based login via yt-dlp and save session cookies.
+    Instagram blocks most programmatic logins — may require handling 2FA
+    or checkpoint in browser first.
+    """
+    print(f"Attempting Instagram login for @{username} ...")
+    print("NOTE: Instagram may block this or ask for verification.")
+
+    opts = {
+        "username": username,
+        "password": password,
+        "cookiefile": output_file,
+        "quiet": False,   # show yt-dlp output so user can see 2FA prompts
+        "no_warnings": False,
+        "skip_download": True,
+        "extract_flat": True,
+        "socket_timeout": 30,
+    }
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.extract_info(f"https://www.instagram.com/{username}/", download=False)
+        _save_and_update_config(output_file)
+    except yt_dlp.utils.DownloadError as e:
+        msg = str(e)
+        if "checkpoint" in msg.lower():
+            print("\nInstagram triggered a security checkpoint.")
+            print("Open Instagram in your browser, complete the verification,")
+            print("then re-run with --browser instead.")
+        elif "two" in msg.lower() or "2fa" in msg.lower() or "code" in msg.lower():
+            print("\nInstagram requires two-factor authentication.")
+            print("Use --browser method instead — log in manually then extract cookies.")
+        elif Path(output_file).exists() and Path(output_file).stat().st_size > 100:
+            # Login triggered an error but cookies were saved (partial session)
+            print(f"Login error but cookies file was created — may still work.")
+            print(f"Detail: {msg[:200]}")
+            _save_and_update_config(output_file)
+        else:
+            print(f"Login failed: {msg[:200]}")
+            print("Try the --browser method instead.")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+
+
+def _save_and_update_config(output_file: str):
+    """Print success message and update config.yaml with the cookie file path."""
+    if not Path(output_file).exists():
+        print(f"ERROR: Cookie file was not created at {output_file}")
+        return
+    size = Path(output_file).stat().st_size
+    print(f"\nCookies saved to: {output_file}  ({size} bytes)")
+
+    config = load_config()
+    config.setdefault("instagram", {})["cookies_file"] = output_file
+    save_config(config)
+    print(f"config.yaml updated: instagram.cookies_file = {output_file}")
+    print("\nYou can now start the bot. Cookies will be reloaded automatically each cycle.")
+
+
 # ── CLI setup ───────────────────────────────────────────────────
 
 
@@ -262,6 +401,32 @@ def main():
     i_imp.add_argument("group", help="Group name")
     i_imp.add_argument("file", help="Path to text file with usernames")
     i_imp.set_defaults(func=instagram_import)
+
+    i_sc = isub.add_parser(
+        "setup-cookies",
+        help="Obtain Instagram cookies and save them (run once before starting bot)",
+    )
+    i_sc.add_argument(
+        "--browser",
+        metavar="BROWSER",
+        help=f"Extract from installed browser: {', '.join(_SUPPORTED_BROWSERS)}",
+    )
+    i_sc.add_argument(
+        "--username",
+        metavar="USERNAME",
+        help="Instagram username for credential login (may be blocked by Instagram)",
+    )
+    i_sc.add_argument(
+        "--password",
+        metavar="PASSWORD",
+        help="Instagram password (omit to be prompted securely)",
+    )
+    i_sc.add_argument(
+        "--output",
+        metavar="FILE",
+        help=f"Where to save cookies (default: {_COOKIE_FILE_DEFAULT})",
+    )
+    i_sc.set_defaults(func=instagram_setup_cookies)
 
     args = parser.parse_args()
     if hasattr(args, "func"):

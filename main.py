@@ -58,9 +58,12 @@ def _is_recent_post(post: dict, max_age_hours: int = MAX_POST_AGE_HOURS) -> bool
 async def run():
     config = load_config()
     cookies = config.get("tiktok", {}).get("cookies_file", "")
-    ig_cookies = config.get("instagram", {}).get("cookies_file", "")
+    ig_cfg = config.get("instagram", {})
+    ig_cookies = ig_cfg.get("cookies_file", "")
+    ig_username = ig_cfg.get("username", "")
+    ig_password = ig_cfg.get("password", "")
     poller = Poller(cookies_file=cookies)
-    ig_poller = InstagramPoller(cookies_file=ig_cookies)
+    ig_poller = InstagramPoller(cookies_file=ig_cookies, username=ig_username, password=ig_password)
     bot_name = config.get("discord", {}).get("bot_name", "Aymannoti")
     notifier = Notifier(bot_name)
 
@@ -92,8 +95,13 @@ async def run():
             total_tiktok = sum(len(g.get("accounts", [])) for g in config.get("groups", []))
             total_ig = sum(len(g.get("instagram_accounts", [])) for g in config.get("groups", []))
             total = total_tiktok + total_ig
-            # Hot-reload Instagram cookies if the path changed in config
-            ig_poller.update_cookies(config.get("instagram", {}).get("cookies_file", ""))
+            # Hot-reload Instagram auth if anything changed in config
+            _ig = config.get("instagram", {})
+            ig_poller.update_cookies(
+                _ig.get("cookies_file", ""),
+                _ig.get("username", ""),
+                _ig.get("password", ""),
+            )
 
             logger.info(f"── Cycle #{cycle_number} started — {total} accounts to check ──")
             cycle_start = time.monotonic()
