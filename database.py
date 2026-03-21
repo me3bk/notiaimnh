@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 class Database:
     def __init__(self, db_path: str):
-        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.conn = sqlite3.connect(db_path, check_same_thread=False, timeout=30)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self._create_tables()
 
