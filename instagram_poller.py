@@ -6,10 +6,47 @@ import yt_dlp
 
 logger = logging.getLogger("aymannoti")
 
+# Permanent errors — no point retrying, the account is gone/private
+_PERMANENT_ERRORS = (
+    "does not exist",
+    "404",
+    "this account is private",
+    "sorry, this page",
+    "not available",
+    "login_required",
+    "checkpoint_required",
+    "no media",
+)
+
+# Rate-limit hints — use longer backoff
+_RATE_LIMIT_HINTS = ("rate", "429", "too many", "please wait", "temporarily")
+
+
+def _detect_post_type(url: str) -> str:
+    """Detect Instagram post type from its URL path."""
+    if "/reel/" in url:
+        return "reel"
+    if "/tv/" in url:
+        return "igtv"
+    if "/stories/" in url:
+        return "story"
+    return "post"  # /p/ or unknown → treat as post
+
 
 class InstagramPoller:
     def __init__(self, cookies_file: str = "", max_retries: int = 3):
-        self._base_opts = {
+        self._cookies_file = cookies_file
+        self._max_retries = max_retries
+        self._base_opts = self._build_opts(cookies_file)
+        if not cookies_file:
+            logger.warning(
+                "InstagramPoller: no cookies_file set. "
+                "Instagram heavily rate-limits unauthenticated requests — "
+                "set instagram.cookies_file in config.yaml for reliable results."
+            )
+
+    def _build_opts(self, cookies_file: str) -> dict:
+        opts = {
             "quiet": True,
             "no_warnings": True,
             "extract_flat": "in_playlist",
@@ -17,14 +54,15 @@ class InstagramPoller:
             "socket_timeout": 20,
         }
         if cookies_file:
-            self._base_opts["cookiefile"] = cookies_file
-        else:
-            logger.warning(
-                "InstagramPoller: no cookies_file set. "
-                "Instagram heavily rate-limits unauthenticated requests — "
-                "set instagram.cookies_file in config.yaml for reliable results."
-            )
-        self._max_retries = max_retries
+            opts["cookiefile"] = cookies_file
+        return opts
+
+    def update_cookies(self, cookies_file: str) -> None:
+        """Hot-reload cookies path when config changes between cycles."""
+        if cookies_file != self._cookies_file:
+            self._cookies_file = cookies_file
+            self._base_opts = self._build_opts(cookies_file)
+            logger.info(f"[Instagram] Cookies file updated: {cookies_file or '(none)'}")
 
     async def fetch_feed(self, username: str) -> list[dict]:
         """Fetch recent posts/reels for an Instagram user via yt-dlp with retry."""
@@ -36,19 +74,24 @@ class InstagramPoller:
         last_err = None
         for attempt in range(1, self._max_retries + 1):
             try:
-                return self._extract(username)
+                # Primary: full profile feed (posts + reels + igtv)
+                posts = self._extract_profile(username)
+                # Fallback: if profile returns nothing, try reels-specific URL
+                if not posts:
+                    logger.debug(f"[Instagram] @{username}: profile empty, trying /reels/ fallback")
+                    posts = self._extract_reels(username)
+                return posts
             except yt_dlp.utils.DownloadError as e:
-                msg = str(e)
-                # Permanent errors — no point retrying
-                if any(k in msg for k in ("does not exist", "404", "This account is private",
-                                           "Sorry, this page", "not available")):
+                msg = str(e).lower()
+                if any(k in msg for k in _PERMANENT_ERRORS):
                     raise
-                # Transient error — retry with backoff
                 last_err = e
-                wait = 2 ** attempt
+                # Rate-limited: use longer backoff (4^n) vs regular transient (2^n)
+                is_rate = any(k in msg for k in _RATE_LIMIT_HINTS)
+                wait = (4 ** attempt) if is_rate else (2 ** attempt)
                 logger.warning(
                     f"[Instagram] yt-dlp attempt {attempt}/{self._max_retries} failed for "
-                    f"@{username}, retrying in {wait}s: {msg[:120]}"
+                    f"@{username}, retrying in {wait}s: {str(e)[:120]}"
                 )
                 time.sleep(wait)
             except Exception as e:
@@ -61,11 +104,19 @@ class InstagramPoller:
                 time.sleep(wait)
         raise last_err  # type: ignore[misc]
 
-    # ── core extraction ───────────────────────────────────────────
+    # ── extraction methods ────────────────────────────────────────
 
-    def _extract(self, username: str) -> list[dict]:
+    def _extract_profile(self, username: str) -> list[dict]:
+        """Primary: fetch from the user profile URL (all post types)."""
         clean = username.lstrip("@")
-        url = f"https://www.instagram.com/{clean}/"
+        return self._run_extraction(f"https://www.instagram.com/{clean}/", clean)
+
+    def _extract_reels(self, username: str) -> list[dict]:
+        """Fallback: fetch from the reels-specific URL."""
+        clean = username.lstrip("@")
+        return self._run_extraction(f"https://www.instagram.com/{clean}/reels/", clean)
+
+    def _run_extraction(self, url: str, clean_username: str) -> list[dict]:
         posts = []
         with yt_dlp.YoutubeDL(self._base_opts) as ydl:
             result = ydl.extract_info(url, download=False)
@@ -77,17 +128,19 @@ class InstagramPoller:
                 vid = str(entry.get("id", ""))
                 if not vid:
                     continue
-                # webpage_url gives the canonical post URL (p/ or reel/)
+                # webpage_url carries the canonical URL including /reel/ or /p/
                 post_url = (
                     entry.get("webpage_url")
                     or entry.get("url")
                     or f"https://www.instagram.com/p/{vid}/"
                 )
+                post_type = _detect_post_type(post_url)
                 posts.append(
                     {
                         "id": vid,
                         "title": entry.get("title", ""),
                         "url": post_url,
+                        "post_type": post_type,
                         "description": (
                             entry.get("description")
                             or entry.get("title")

@@ -92,6 +92,8 @@ async def run():
             total_tiktok = sum(len(g.get("accounts", [])) for g in config.get("groups", []))
             total_ig = sum(len(g.get("instagram_accounts", [])) for g in config.get("groups", []))
             total = total_tiktok + total_ig
+            # Hot-reload Instagram cookies if the path changed in config
+            ig_poller.update_cookies(config.get("instagram", {}).get("cookies_file", ""))
 
             logger.info(f"── Cycle #{cycle_number} started — {total} accounts to check ──")
             cycle_start = time.monotonic()

@@ -30,10 +30,17 @@ class Notifier:
     ):
         """Send a Discord webhook notification for a new post."""
         if platform == "instagram":
+            post_type = post.get("post_type", "post")
+            type_label = {
+                "reel": "Reel",
+                "post": "Post",
+                "igtv": "IGTV Video",
+                "story": "Story",
+            }.get(post_type, "Post")
             msg_parts = [
                 "@everyone",
-                f"New Instagram post from @{username}",
-                f"@{username} just posted on Instagram!",
+                f"New Instagram {type_label} from @{username}",
+                f"@{username} just posted a new {type_label.lower()} on Instagram!",
                 "",
                 post["url"],
             ]
