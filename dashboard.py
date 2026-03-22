@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
+import instaloader
 import yt_dlp
 from flask import Flask, render_template, request, jsonify
 
@@ -288,31 +289,19 @@ def _test_tiktok_post(clean, group_name, webhook_url, bot_name):
 
 def _test_instagram_post(clean, group_name, webhook_url, bot_name, config):
     ig_cfg = config.get("instagram", {})
-    opts = {**YDL_OPTS}
-    if ig_cfg.get("cookies_file"):
-        opts["cookiefile"] = ig_cfg["cookies_file"]
-    if ig_cfg.get("username"):
-        opts["username"] = ig_cfg["username"]
-    if ig_cfg.get("password"):
-        opts["password"] = ig_cfg["password"]
-
-    url = f"https://www.instagram.com/{clean}/"
+    from instagram_poller import _make_loader, _detect_post_type
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            result = ydl.extract_info(url, download=False)
-        if not result or not result.get("entries"):
-            return jsonify({"error": f"@{clean} has no Instagram posts to send"}), 404
-        entries = [e for e in result.get("entries", []) if e]
-        if not entries:
-            return jsonify({"error": f"@{clean} has no Instagram posts to send"}), 404
-        entry = entries[0]
-        vid = str(entry.get("id", ""))
-        post_url = (
-            entry.get("webpage_url")
-            or entry.get("url")
-            or f"https://www.instagram.com/p/{vid}/"
+        L = _make_loader(
+            ig_cfg.get("cookies_file", ""),
+            ig_cfg.get("username", ""),
+            ig_cfg.get("password", ""),
         )
-        post_type = "Reel" if "/reel/" in post_url else "Post"
+        profile = instaloader.Profile.from_username(L.context, clean)
+        post = next(iter(profile.get_posts()), None)
+        if post is None:
+            return jsonify({"error": f"@{clean} has no Instagram posts to send"}), 404
+        post_url = f"https://www.instagram.com/p/{post.shortcode}/"
+        post_type = _detect_post_type(post).capitalize()
         payload = {
             "username": bot_name,
             "content": "\n".join([
@@ -324,13 +313,12 @@ def _test_instagram_post(clean, group_name, webhook_url, bot_name, config):
             ]),
         }
         return _send_test_webhook(webhook_url, payload, clean, group_name, post_url)
-    except yt_dlp.utils.DownloadError as e:
-        msg = str(e).lower()
-        if "private" in msg or "login" in msg or "checkpoint" in msg:
-            return jsonify({"error": "Account is private or cookies are required"}), 404
-        if "does not exist" in msg or "404" in msg or "sorry" in msg:
-            return jsonify({"error": "Instagram account not found"}), 404
-        return jsonify({"error": str(e)[:200]}), 502
+    except instaloader.exceptions.ProfileNotExistsException:
+        return jsonify({"error": "Instagram account not found"}), 404
+    except instaloader.exceptions.PrivateProfileNotFollowedException:
+        return jsonify({"error": "Account is private — authentication required"}), 404
+    except instaloader.exceptions.LoginRequiredException:
+        return jsonify({"error": "Instagram login required — set username/password in config"}), 404
     except Exception as e:
         return jsonify({"error": str(e)[:200]}), 500
 
@@ -422,61 +410,39 @@ def _check_tiktok_user(clean: str):
 def _check_instagram_user(clean: str):
     config = load_config()
     ig_cfg = config.get("instagram", {})
-    opts = {**YDL_OPTS}
-    if ig_cfg.get("cookies_file"):
-        opts["cookiefile"] = ig_cfg["cookies_file"]
-    if ig_cfg.get("username"):
-        opts["username"] = ig_cfg["username"]
-    if ig_cfg.get("password"):
-        opts["password"] = ig_cfg["password"]
-
-    url = f"https://www.instagram.com/{clean}/"
+    from instagram_poller import _make_loader, _detect_post_type
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            result = ydl.extract_info(url, download=False)
-
-        if not result or not result.get("entries"):
-            return jsonify({
-                "status": "found",
-                "username": clean,
-                "platform": "instagram",
-                "post_count": 0,
-                "latest_posts": [],
-                "feed_title": f"@{clean}",
-                "message": "Account found — no posts yet",
-            })
-
-        entries = [e for e in result.get("entries", []) if e]
+        L = _make_loader(
+            ig_cfg.get("cookies_file", ""),
+            ig_cfg.get("username", ""),
+            ig_cfg.get("password", ""),
+        )
+        profile = instaloader.Profile.from_username(L.context, clean)
         posts = []
-        for entry in entries[:5]:
-            vid = str(entry.get("id", ""))
-            post_url = (
-                entry.get("webpage_url")
-                or entry.get("url")
-                or f"https://www.instagram.com/p/{vid}/"
-            )
-            post_type = "reel" if "/reel/" in post_url else "post"
+        for post in profile.get_posts():
+            if len(posts) >= 5:
+                break
+            post_url = f"https://www.instagram.com/p/{post.shortcode}/"
             posts.append({
-                "title": (entry.get("title") or "")[:100],
+                "title": (post.caption or "")[:100],
                 "url": post_url,
-                "post_type": post_type,
-                "published": "",
+                "post_type": _detect_post_type(post),
+                "published": post.date_utc.strftime("%Y-%m-%d"),
             })
         return jsonify({
             "status": "found",
             "username": clean,
             "platform": "instagram",
-            "feed_title": result.get("title", f"@{clean}"),
-            "post_count": len(entries),
+            "feed_title": f"@{clean}",
+            "post_count": profile.mediacount,
             "latest_posts": posts,
         })
-
-    except yt_dlp.utils.DownloadError as e:
-        msg = str(e).lower()
-        if any(k in msg for k in ("private", "login", "checkpoint", "does not exist", "404", "sorry")):
-            status_msg = "Account is private or requires login" if "private" in msg or "login" in msg else "Account not found"
-            return jsonify({"status": "error", "username": clean, "platform": "instagram", "message": status_msg}), 404
-        return jsonify({"status": "error", "username": clean, "platform": "instagram", "message": str(e)[:200]}), 502
+    except instaloader.exceptions.ProfileNotExistsException:
+        return jsonify({"status": "error", "username": clean, "platform": "instagram", "message": "Account not found"}), 404
+    except instaloader.exceptions.PrivateProfileNotFollowedException:
+        return jsonify({"status": "error", "username": clean, "platform": "instagram", "message": "Account is private — authentication required"}), 404
+    except instaloader.exceptions.LoginRequiredException:
+        return jsonify({"status": "error", "username": clean, "platform": "instagram", "message": "Instagram login required — set username/password in config"}), 404
     except Exception as e:
         return jsonify({"status": "error", "username": clean, "platform": "instagram", "message": str(e)[:200]}), 500
 
