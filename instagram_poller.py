@@ -1,36 +1,66 @@
 import asyncio
 import logging
+import os
 import time
 
-import yt_dlp
+import instaloader
 
 logger = logging.getLogger("aymannoti")
 
-# Permanent errors — no point retrying, the account is gone/private
-_PERMANENT_ERRORS = (
-    "does not exist",
-    "404",
-    "this account is private",
-    "sorry, this page",
-    "not available",
-    "login_required",
-    "checkpoint_required",
-    "no media",
+# Permanent errors — no point retrying
+_PERMANENT_EXCEPTIONS = (
+    instaloader.exceptions.ProfileNotExistsException,
+    instaloader.exceptions.PrivateProfileNotFollowedException,
+    instaloader.exceptions.LoginRequiredException,
 )
-
-# Rate-limit hints — use longer backoff
-_RATE_LIMIT_HINTS = ("rate", "429", "too many", "please wait", "temporarily")
+_PERMANENT_MSG_HINTS = ("does not exist", "not found", "404", "private")
 
 
-def _detect_post_type(url: str) -> str:
-    """Detect Instagram post type from its URL path."""
-    if "/reel/" in url:
+def _detect_post_type(post: instaloader.Post) -> str:
+    """Detect Instagram post type from instaloader Post object."""
+    try:
+        if hasattr(post, "product_type") and post.product_type == "clips":
+            return "reel"
+    except Exception:
+        pass
+    if post.is_video:
         return "reel"
-    if "/tv/" in url:
-        return "igtv"
-    if "/stories/" in url:
-        return "story"
-    return "post"  # /p/ or unknown → treat as post
+    if post.typename == "GraphSidecar":
+        return "post"
+    return "post"
+
+
+def _make_loader(session_file: str = "", username: str = "", password: str = "") -> instaloader.Instaloader:
+    """Create and authenticate an instaloader instance."""
+    L = instaloader.Instaloader(
+        quiet=True,
+        max_connection_attempts=1,
+        request_timeout=20,
+        download_pictures=False,
+        download_videos=False,
+        download_video_thumbnails=False,
+        download_geotags=False,
+        download_comments=False,
+        save_metadata=False,
+        post_metadata_txt_pattern="",
+    )
+    if session_file and os.path.exists(session_file):
+        try:
+            L.load_session_from_file(username or "", session_file)
+            logger.debug("[Instagram] Loaded session from file")
+            return L
+        except Exception as e:
+            logger.warning(f"[Instagram] Failed to load session file: {e}")
+    if username and password:
+        try:
+            L.login(username, password)
+            if session_file:
+                L.save_session_to_file(session_file)
+                logger.info(f"[Instagram] Logged in and saved session to {session_file}")
+            return L
+        except Exception as e:
+            logger.warning(f"[Instagram] Login failed: {e}")
+    return L
 
 
 class InstagramPoller:
@@ -41,33 +71,24 @@ class InstagramPoller:
         password: str = "",
         max_retries: int = 3,
     ):
+        # cookies_file is reused as the instaloader session file path
         self._cookies_file = cookies_file
         self._username = username
         self._password = password
         self._max_retries = max_retries
-        self._base_opts = self._build_opts(cookies_file, username, password)
+        self._loader: instaloader.Instaloader | None = None
         if not cookies_file and not username:
             logger.warning(
-                "InstagramPoller: no cookies_file or username set. "
-                "Instagram heavily rate-limits unauthenticated requests — "
-                "run: python manage.py instagram setup-cookies --browser chrome"
+                "InstagramPoller: no session_file or username set. "
+                "Instagram requires authentication — "
+                "set instagram.username + password in config.yaml"
             )
 
-    def _build_opts(self, cookies_file: str, username: str = "", password: str = "") -> dict:
-        opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "extract_flat": "in_playlist",
-            "playlistend": 5,
-            "socket_timeout": 20,
-        }
-        if cookies_file:
-            opts["cookiefile"] = cookies_file
-        if username:
-            opts["username"] = username
-        if password:
-            opts["password"] = password
-        return opts
+    def _get_loader(self) -> instaloader.Instaloader:
+        """Get or create a cached authenticated instaloader instance."""
+        if self._loader is None:
+            self._loader = _make_loader(self._cookies_file, self._username, self._password)
+        return self._loader
 
     def update_cookies(self, cookies_file: str, username: str = "", password: str = "") -> None:
         """Hot-reload auth config when values change between cycles."""
@@ -80,44 +101,30 @@ class InstagramPoller:
             self._cookies_file = cookies_file
             self._username = username
             self._password = password
-            self._base_opts = self._build_opts(cookies_file, username, password)
+            self._loader = None  # force re-auth on next use
             logger.info(
                 f"[Instagram] Auth config updated: "
-                f"cookies={'set' if cookies_file else 'none'}, "
+                f"session={'set' if cookies_file else 'none'}, "
                 f"username={'set' if username else 'none'}"
             )
 
     async def fetch_feed(self, username: str) -> list[dict]:
-        """Fetch recent posts/reels for an Instagram user via yt-dlp with retry."""
+        """Fetch recent posts for an Instagram user via instaloader with retry."""
         return await asyncio.to_thread(self._extract_with_retry, username)
 
     # ── retry wrapper ─────────────────────────────────────────────
 
     def _extract_with_retry(self, username: str) -> list[dict]:
-        last_err = None
+        last_err: Exception | None = None
         for attempt in range(1, self._max_retries + 1):
             try:
-                # Primary: full profile feed (posts + reels + igtv)
-                posts = self._extract_profile(username)
-                # Fallback: if profile returns nothing, try reels-specific URL
-                if not posts:
-                    logger.debug(f"[Instagram] @{username}: profile empty, trying /reels/ fallback")
-                    posts = self._extract_reels(username)
-                return posts
-            except yt_dlp.utils.DownloadError as e:
-                msg = str(e).lower()
-                if any(k in msg for k in _PERMANENT_ERRORS):
-                    raise
-                last_err = e
-                # Rate-limited: use longer backoff (4^n) vs regular transient (2^n)
-                is_rate = any(k in msg for k in _RATE_LIMIT_HINTS)
-                wait = (4 ** attempt) if is_rate else (2 ** attempt)
-                logger.warning(
-                    f"[Instagram] yt-dlp attempt {attempt}/{self._max_retries} failed for "
-                    f"@{username}, retrying in {wait}s: {str(e)[:120]}"
-                )
-                time.sleep(wait)
+                return self._extract_profile(username)
+            except _PERMANENT_EXCEPTIONS:
+                raise
             except Exception as e:
+                msg = str(e).lower()
+                if any(k in msg for k in _PERMANENT_MSG_HINTS):
+                    raise
                 last_err = e
                 wait = 2 ** attempt
                 logger.warning(
@@ -127,58 +134,27 @@ class InstagramPoller:
                 time.sleep(wait)
         raise last_err  # type: ignore[misc]
 
-    # ── extraction methods ────────────────────────────────────────
+    # ── extraction ────────────────────────────────────────────────
 
     def _extract_profile(self, username: str) -> list[dict]:
-        """Primary: fetch from the user profile URL (all post types)."""
         clean = username.lstrip("@")
-        return self._run_extraction(f"https://www.instagram.com/{clean}/", clean)
-
-    def _extract_reels(self, username: str) -> list[dict]:
-        """Fallback: fetch from the reels-specific URL."""
-        clean = username.lstrip("@")
-        return self._run_extraction(f"https://www.instagram.com/{clean}/reels/", clean)
-
-    def _run_extraction(self, url: str, clean_username: str) -> list[dict]:
+        L = self._get_loader()
+        profile = instaloader.Profile.from_username(L.context, clean)
         posts = []
-        with yt_dlp.YoutubeDL(self._base_opts) as ydl:
-            result = ydl.extract_info(url, download=False)
-            if not result:
-                return posts
-            for entry in result.get("entries") or []:
-                if not entry:
-                    continue
-                vid = str(entry.get("id", ""))
-                if not vid:
-                    continue
-                # webpage_url carries the canonical URL including /reel/ or /p/
-                post_url = (
-                    entry.get("webpage_url")
-                    or entry.get("url")
-                    or f"https://www.instagram.com/p/{vid}/"
-                )
-                post_type = _detect_post_type(post_url)
-                posts.append(
-                    {
-                        "id": vid,
-                        "title": entry.get("title", ""),
-                        "url": post_url,
-                        "post_type": post_type,
-                        "description": (
-                            entry.get("description")
-                            or entry.get("title")
-                            or ""
-                        )[:300],
-                        "published": entry.get("timestamp")
-                        or entry.get("upload_date", ""),
-                        "thumbnail": self._get_thumbnail(entry),
-                    }
-                )
+        for post in profile.get_posts():
+            if len(posts) >= 5:
+                break
+            shortcode = post.shortcode
+            post_url = f"https://www.instagram.com/p/{shortcode}/"
+            posts.append(
+                {
+                    "id": shortcode,
+                    "title": (post.caption or "")[:100],
+                    "url": post_url,
+                    "post_type": _detect_post_type(post),
+                    "description": (post.caption or "")[:300],
+                    "published": int(post.date_utc.timestamp()),
+                    "thumbnail": post.url,
+                }
+            )
         return posts
-
-    @staticmethod
-    def _get_thumbnail(entry: dict) -> str | None:
-        thumbs = entry.get("thumbnails")
-        if thumbs and isinstance(thumbs, list):
-            return thumbs[0].get("url")
-        return entry.get("thumbnail")
