@@ -140,6 +140,7 @@ body {
 .btn-test { border-color: var(--warn); color: var(--warn); }
 .btn-test:hover { background: var(--warn-dim); }
 .sidebar .btn { width: 100%; justify-content: center; margin-top: 6px; }
+.platform-tab.active { background: var(--accent); border-color: var(--accent); color: #000; }
 
 /* Sidebar nav */
 .sidebar-nav-item {

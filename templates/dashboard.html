@@ -161,8 +161,12 @@
   <div class="modal-overlay" id="add-accounts-modal">
     <div class="modal">
       <h3>Add Accounts to <span id="add-accounts-group-name"></span></h3>
+      <div style="display:flex;gap:8px;margin-bottom:16px">
+        <button class="btn platform-tab active" id="tab-tiktok" onclick="setAddPlatform('tiktok')">🎵 TikTok</button>
+        <button class="btn platform-tab" id="tab-instagram" onclick="setAddPlatform('instagram')">📷 Instagram</button>
+      </div>
       <div id="add-step-input">
-        <div class="form-group"><label>TikTok Usernames</label>
+        <div class="form-group"><label id="add-platform-label">TikTok Usernames</label>
           <textarea id="add-usernames"
             placeholder="Enter usernames separated by commas, spaces, or new lines"></textarea>
           <div class="hint">Paste one per line or separate with commas. The @ is optional.</div>
@@ -252,7 +256,7 @@
     // Modals
     function showModal(id) {
       document.getElementById(id).classList.add('show');
-      if (id === 'add-accounts-modal') document.getElementById('add-accounts-group-name').textContent = selectedGroup;
+      if (id === 'add-accounts-modal') { document.getElementById('add-accounts-group-name').textContent = selectedGroup; setAddPlatform('tiktok'); }
       if (id === 'add-group-modal') { selectedAddIcon = '📁'; buildEmojiGrid('add-icon-grid', selectedAddIcon, e => selectedAddIcon = e); }
       if (id === 'edit-group-modal' && currentGroupData) {
         document.getElementById('edit-group-name').value = currentGroupData.name || '';
@@ -344,12 +348,16 @@
       data.forEach(a => {
         const tr = document.createElement('tr');
         const ls = a.last_seen ? timeSince(new Date(a.last_seen)) : 'Never';
-        tr.innerHTML = `<td class="username-cell"><a href="https://tiktok.com/@${esc(a.username)}" target="_blank">@${esc(a.username)}</a></td>
+        const isIG = a.platform === 'instagram';
+        const profileUrl = isIG ? `https://instagram.com/${esc(a.username)}` : `https://tiktok.com/@${esc(a.username)}`;
+        const platformIcon = isIG ? '<span title="Instagram" style="font-size:12px;margin-right:4px">📷</span>' : '<span title="TikTok" style="font-size:12px;margin-right:4px;color:var(--accent)">🎵</span>';
+        const plat = isIG ? 'instagram' : 'tiktok';
+        tr.innerHTML = `<td class="username-cell">${platformIcon}<a href="${profileUrl}" target="_blank">@${esc(a.username)}</a></td>
       <td>${a.posts_seen}</td><td style="color:var(--text-muted)">${ls}</td>
       <td><div class="actions-cell">
-        <button class="btn btn-sm btn-test" onclick="testPost('${esc(a.username)}',this)" title="Send latest post to Discord">📤 Test</button>
-        <button class="btn btn-sm" onclick="checkUserInline('${esc(a.username)}',this)">🔍</button>
-        <button class="btn btn-sm btn-danger" onclick="removeAccount('${esc(a.username)}')">✕</button>
+        <button class="btn btn-sm btn-test" onclick="testPost('${esc(a.username)}','${plat}',this)" title="Send latest post to Discord">📤 Test</button>
+        <button class="btn btn-sm" onclick="checkUserInline('${esc(a.username)}','${plat}',this)">🔍</button>
+        <button class="btn btn-sm btn-danger" onclick="removeAccount('${esc(a.username)}','${plat}')">✕</button>
       </div></td>`;
         list.appendChild(tr);
       });
@@ -362,9 +370,9 @@
     }
 
     // Test Post
-    async function testPost(username, btn) {
+    async function testPost(username, platform, btn) {
       const o = btn.innerHTML; btn.innerHTML = '<span class="spinner"></span>'; btn.disabled = true;
-      try { const { ok, data } = await api(`/api/groups/${encodeURIComponent(selectedGroup)}/accounts/${encodeURIComponent(username)}/test`, { method: 'POST' }); toast(ok ? (data.message || 'Sent!') : (data.error || 'Failed'), 'error' !== undefined && ok ? 'success' : 'error'); }
+      try { const { ok, data } = await api(`/api/groups/${encodeURIComponent(selectedGroup)}/accounts/${encodeURIComponent(username)}/test?platform=${platform}`, { method: 'POST' }); toast(ok ? (data.message || 'Sent!') : (data.error || 'Failed'), ok ? 'success' : 'error'); }
       catch { toast(`Failed to send test for @${username}`, 'error'); }
       btn.innerHTML = o; btn.disabled = false;
     }
@@ -398,6 +406,13 @@
 
     // Verify & Add
     let verifiedUsers = [];
+    let addAccountsPlatform = 'tiktok';
+    function setAddPlatform(p) {
+      addAccountsPlatform = p;
+      document.getElementById('tab-tiktok').classList.toggle('active', p === 'tiktok');
+      document.getElementById('tab-instagram').classList.toggle('active', p === 'instagram');
+      document.getElementById('add-platform-label').textContent = p === 'instagram' ? 'Instagram Usernames' : 'TikTok Usernames';
+    }
     function backToInput() { document.getElementById('add-step-input').style.display = 'block'; document.getElementById('add-step-verify').style.display = 'none'; verifiedUsers = []; }
 
     async function getAllExistingAccounts() {
@@ -437,7 +452,7 @@
       for (const username of toCheck) {
         const row = document.getElementById(`vr-${CSS.escape(username)}`);
         try {
-          const { data } = await api(`/api/check/${encodeURIComponent(username)}`);
+          const { data } = await api(`/api/check/${encodeURIComponent(username)}?platform=${addAccountsPlatform}`);
           if (data.status === 'found') {
             const label = data.post_count > 0 ? `✓ ${data.post_count} posts` : '✓ حساب موجود — يمكن إضافته';
             const cls = data.post_count > 0 ? 'badge-ok' : 'badge-zero';
@@ -460,7 +475,7 @@
 
     async function addVerified() {
       if (!verifiedUsers.length) return;
-      const { ok, data } = await api(`/api/groups/${encodeURIComponent(selectedGroup)}/accounts`, { method: 'POST', body: { usernames: verifiedUsers.join(',') } });
+      const { ok, data } = await api(`/api/groups/${encodeURIComponent(selectedGroup)}/accounts?platform=${addAccountsPlatform}`, { method: 'POST', body: { usernames: verifiedUsers.join(',') } });
       if (ok) { toast(`Added ${data.added.length} account(s)`); hideModal('add-accounts-modal'); document.getElementById('add-usernames').value = ''; loadAccounts(selectedGroup); loadGroups(); loadStats(); }
       else toast(data.error || 'Failed', 'error');
     }
@@ -468,20 +483,20 @@
     async function addAccounts() {
       const raw = document.getElementById('add-usernames').value.trim();
       if (!raw) { toast('Enter at least one username', 'error'); return; }
-      const { ok, data } = await api(`/api/groups/${encodeURIComponent(selectedGroup)}/accounts`, { method: 'POST', body: { usernames: raw } });
+      const { ok, data } = await api(`/api/groups/${encodeURIComponent(selectedGroup)}/accounts?platform=${addAccountsPlatform}`, { method: 'POST', body: { usernames: raw } });
       if (ok) { const m = []; if (data.added.length) m.push(`Added ${data.added.length}`); if (data.skipped.length) m.push(`${data.skipped.length} existed`); toast(m.join(', ') || 'Done'); hideModal('add-accounts-modal'); document.getElementById('add-usernames').value = ''; loadAccounts(selectedGroup); loadGroups(); loadStats(); }
       else toast(data.error || 'Failed', 'error');
     }
 
-    async function removeAccount(username) {
+    async function removeAccount(username, platform) {
       if (!confirm(`Remove @${username}?`)) return;
-      const { ok } = await api(`/api/groups/${encodeURIComponent(selectedGroup)}/accounts/${encodeURIComponent(username)}`, { method: 'DELETE' });
+      const { ok } = await api(`/api/groups/${encodeURIComponent(selectedGroup)}/accounts/${encodeURIComponent(username)}?platform=${platform}`, { method: 'DELETE' });
       if (ok) { toast(`Removed @${username}`); loadAccounts(selectedGroup); loadGroups(); loadStats(); } else toast('Failed', 'error');
     }
 
-    async function checkUserInline(username, btn) {
+    async function checkUserInline(username, platform, btn) {
       const o = btn.innerHTML; btn.innerHTML = '<span class="spinner"></span>'; btn.disabled = true;
-      try { const { data } = await api(`/api/check/${encodeURIComponent(username)}`); toast(data.status === 'found' ? (data.post_count > 0 ? `@${username}: ${data.post_count} posts` : `@${username}: حساب موجود — 0 فيديو`) : `@${username}: ${data.message}`, data.status === 'found' ? 'success' : 'error'); }
+      try { const { data } = await api(`/api/check/${encodeURIComponent(username)}?platform=${platform}`); toast(data.status === 'found' ? (data.post_count > 0 ? `@${username}: ${data.post_count} posts` : `@${username}: حساب موجود — 0 فيديو`) : `@${username}: ${data.message}`, data.status === 'found' ? 'success' : 'error'); }
       catch { toast(`Failed @${username}`, 'error'); }
       btn.innerHTML = o; btn.disabled = false;
     }
